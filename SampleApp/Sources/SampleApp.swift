@@ -39,7 +39,8 @@ struct ContentView: View {
                             .offset(x: overlayOffset.width + dragTranslation.width,
                                     y: overlayOffset.height + dragTranslation.height)
                             .scaleEffect(isDragging ? 1.04 : 1)
-                            .gesture(dragGesture(in: proxy.size))
+                            // Preserve the shutter's tap gesture while the card tracks drags.
+                            .simultaneousGesture(dragGesture(in: proxy.size))
                             .animation(.interactiveSpring(response: 0.3, dampingFraction: 0.72), value: isDragging)
                             .padding(.bottom, Self.overlayBottomInset)
                     }
@@ -306,10 +307,17 @@ final class CameraController: NSObject, ObservableObject {
     private let videoQueue = DispatchQueue(label: "sample.video")
     private var frameCount = 0
     private var lastSize = CGSize.zero
+    private var hasStarted = false
 
     func start() {
-        sessionQueue.async { [self] in
-            configure()
+        guard !hasStarted else { return }
+        hasStarted = true
+        enqueueConfigurationAttempt()
+    }
+
+    private func enqueueConfigurationAttempt() {
+        sessionQueue.async { [weak self] in
+            self?.configure()
         }
     }
 
@@ -321,16 +329,21 @@ final class CameraController: NSObject, ObservableObject {
     }
 
     nonisolated private func configure() {
-        let providerConnected = CAMouflageIsProviderConnected()
+        guard CAMouflageIsProviderConnected() else {
+            Task { @MainActor in
+                self.statusText = "No camera — is the CAMouflage mock app running?"
+            }
+            scheduleConfigurationRetry()
+            return
+        }
 
         guard let device = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back)
                 ?? AVCaptureDevice.default(for: .video)
         else {
             Task { @MainActor in
-                self.statusText = providerConnected
-                    ? "Provider connected, but no camera found"
-                    : "No camera — is the CAMouflage mock app running?"
+                self.statusText = "Provider connected, but no camera found"
             }
+            scheduleConfigurationRetry()
             return
         }
 
@@ -365,6 +378,14 @@ final class CameraController: NSObject, ObservableObject {
             Task { @MainActor in
                 self.statusText = "Input failed: \(message)"
             }
+            scheduleConfigurationRetry()
+        }
+    }
+
+    nonisolated private func scheduleConfigurationRetry() {
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(1))
+            self?.enqueueConfigurationAttempt()
         }
     }
 }

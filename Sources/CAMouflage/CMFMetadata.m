@@ -106,15 +106,46 @@ static CGRect cmf_output_roi(AVCaptureMetadataOutput *output) {
 
 // A shared software-renderer CIContext. Vision's CVPixelBuffer path fails on the
 // simulator ("Could not create inference context"); handing it a CGImage decoded
-// off a software context sidesteps the GPU/Metal setup that trips there.
+// off a software context sidesteps the GPU/Metal setup that trips there. Avoid
+// CIImage's CVPixelBuffer initializer as well: some simulator runtimes crash while
+// it inspects the IOSurface-backed buffer's CoreVideo attachments.
 static CGImageRef cmf_cgimage_from_pixel_buffer(CVPixelBufferRef pixelBuffer) {
     static CIContext *context;
     static dispatch_once_t once;
     dispatch_once(&once, ^{
         context = [CIContext contextWithOptions:@{ kCIContextUseSoftwareRenderer: @YES }];
     });
-    CIImage *image = [CIImage imageWithCVPixelBuffer:pixelBuffer];
-    return [context createCGImage:image fromRect:image.extent];
+
+    if (CVPixelBufferGetPixelFormatType(pixelBuffer) != kCVPixelFormatType_32BGRA) {
+        return NULL;
+    }
+    if (CVPixelBufferLockBaseAddress(pixelBuffer, kCVPixelBufferLock_ReadOnly) != kCVReturnSuccess) {
+        return NULL;
+    }
+
+    CGImageRef cgImage = NULL;
+    void *baseAddress = CVPixelBufferGetBaseAddress(pixelBuffer);
+    size_t width = CVPixelBufferGetWidth(pixelBuffer);
+    size_t height = CVPixelBufferGetHeight(pixelBuffer);
+    size_t bytesPerRow = CVPixelBufferGetBytesPerRow(pixelBuffer);
+    if (baseAddress && width > 0 && height > 0 && bytesPerRow >= width * 4) {
+        NSData *data = [NSData dataWithBytesNoCopy:baseAddress
+                                            length:bytesPerRow * height
+                                      freeWhenDone:NO];
+        CGColorSpaceRef colorSpace = CGColorSpaceCreateDeviceRGB();
+        CIImage *image = [CIImage imageWithBitmapData:data
+                                         bytesPerRow:bytesPerRow
+                                                size:CGSizeMake(width, height)
+                                              format:kCIFormatBGRA8
+                                          colorSpace:colorSpace];
+        if (image) {
+            cgImage = [context createCGImage:image fromRect:CGRectMake(0, 0, width, height)];
+        }
+        CGColorSpaceRelease(colorSpace);
+    }
+
+    CVPixelBufferUnlockBaseAddress(pixelBuffer, kCVPixelBufferLock_ReadOnly);
+    return cgImage;
 }
 
 static NSArray *cmf_detect_codes(AVCaptureMetadataOutput *output, CVPixelBufferRef pixelBuffer, NSArray *types, CMTime time) {
