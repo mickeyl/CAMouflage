@@ -3,6 +3,11 @@ import AppKit
 
 private let kControlSocketPath = "/tmp/camouflage.sock"
 
+private func suppressSIGPIPE(on fd: Int32) {
+    var enabled: Int32 = 1
+    setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &enabled, socklen_t(MemoryLayout.size(ofValue: enabled)))
+}
+
 struct SocketClientInfo: Equatable {
     let pid: Int
     let bundleId: String
@@ -30,6 +35,7 @@ final class MockCameraServer: ObservableObject {
     @Published var previewImage: NSImage?
     @Published private(set) var connectedClient: SocketClientInfo?
     @Published private(set) var activeSessionCount: Int = 0
+    @Published private(set) var clientConfiguration: ClientMockConfiguration?
     @Published var fixture: FixtureSource = .restore() {
         didSet {
             guard fixture != oldValue else { return }
@@ -61,6 +67,7 @@ final class MockCameraServer: ObservableObject {
     private var readSource: DispatchSourceRead?
     private var readBuffer = Data()
     private var sessions = Set<UInt32>()
+    private var clientSuppliedConfiguration: ClientMockConfiguration?
 
     private static let serverEnabledKey = "ServerEnabled"
 
@@ -124,6 +131,7 @@ final class MockCameraServer: ObservableObject {
                 NSLog("CAMouflage-Mock: socket() failed")
                 return
             }
+            suppressSIGPIPE(on: fd)
             unlink(kControlSocketPath)
 
             var addr = sockaddr_un()
@@ -191,6 +199,8 @@ final class MockCameraServer: ObservableObject {
 
             sessions.removeAll()
             publishSessionCount(0)
+            clientSuppliedConfiguration = nil
+            publishClientConfiguration(nil)
             readBuffer.removeAll()
             publishStatus(.stopped)
             log("Stopped")
@@ -206,6 +216,7 @@ final class MockCameraServer: ObservableObject {
     private func acceptClient() {
         let fd = accept(serverFd, nil, nil)
         guard fd >= 0 else { return }
+        suppressSIGPIPE(on: fd)
 
         if clientFd >= 0 {
             // Takeover: a freshly launched app (or another simulator) supersedes
@@ -218,6 +229,7 @@ final class MockCameraServer: ObservableObject {
             disconnectClient()
         }
         clientFd = fd
+        clearClientSuppliedConfiguration(logChange: false)
         readBuffer.removeAll()
         sessions.removeAll()
         publishSessionCount(0)
@@ -247,6 +259,7 @@ final class MockCameraServer: ObservableObject {
         sessions.removeAll()
         publishSessionCount(0)
         frameServer.revokeAll()
+        clearClientSuppliedConfiguration(logChange: true)
         publishStatus(serverFd >= 0 ? .listening : .stopped)
         log("Client disconnected")
     }
@@ -285,16 +298,38 @@ final class MockCameraServer: ObservableObject {
                 log("Hello from \(info.displayText)")
 
             case "listDevices":
-                send(["type": "didListDevices", "devices": Self.devices], to: clientFd)
+                send(["type": "didListDevices", "devices": currentWireDevices], to: clientFd)
+
+            case "setMockConfiguration":
+                handleSetMockConfiguration(message)
+
+            case "clearMockConfiguration":
+                clearClientSuppliedConfiguration(logChange: true)
+                sendMockConfigurationResult(ok: true, error: nil)
+                send(["type": "devicesChanged", "devices": currentWireDevices], to: clientFd)
 
             case "startSession":
-                guard let sessionId = (message["sessionId"] as? NSNumber)?.uint32Value else { return }
-                let deviceId = message["deviceId"] as? String ?? "?"
-                sessions.insert(sessionId)
-                publishSessionCount(sessions.count)
-                frameServer.authorize(sessionId: sessionId)
-                send(["type": "didStartSession", "sessionId": sessionId, "ok": true], to: clientFd)
-                log("Session \(sessionId) started (\(deviceId))")
+                guard let sessionId = (message["sessionId"] as? NSNumber)?.uint32Value,
+                      let deviceID = message["deviceId"] as? String else { return }
+                guard currentDeviceIDs.contains(deviceID) else {
+                    send(["type": "didStartSession", "sessionId": sessionId, "ok": false,
+                          "error": "unknown device '\(deviceID)'"], to: clientFd)
+                    return
+                }
+                let requestingFd = clientFd
+                frameServer.authorize(sessionId: sessionId, deviceID: deviceID) { [weak self] in
+                    guard let self else { return }
+                    self.ioQueue.async {
+                        guard self.clientFd == requestingFd else {
+                            self.frameServer.revoke(sessionId: sessionId)
+                            return
+                        }
+                        self.sessions.insert(sessionId)
+                        self.publishSessionCount(self.sessions.count)
+                        self.send(["type": "didStartSession", "sessionId": sessionId, "ok": true], to: requestingFd)
+                        self.log("Session \(sessionId) started (\(deviceID))")
+                    }
+                }
 
             case "stopSession":
                 guard let sessionId = (message["sessionId"] as? NSNumber)?.uint32Value else { return }
@@ -325,6 +360,54 @@ final class MockCameraServer: ObservableObject {
             default:
                 log("Ignoring unknown message type \(type)")
         }
+    }
+
+    // MARK: - Client-supplied configuration (ioQueue)
+
+    private var currentWireDevices: [[String: Any]] {
+        clientSuppliedConfiguration?.wireDevices ?? Self.devices
+    }
+
+    private var currentDeviceIDs: Set<String> {
+        Set(currentWireDevices.compactMap { $0["id"] as? String })
+    }
+
+    private func handleSetMockConfiguration(_ message: [String: Any]) {
+        guard let rawConfiguration = message["configuration"] else {
+            sendMockConfigurationResult(ok: false, error: "missing configuration")
+            return
+        }
+        do {
+            let data = try JSONSerialization.data(withJSONObject: rawConfiguration)
+            let configuration = try JSONDecoder().decode(ClientMockConfiguration.self, from: data)
+            try configuration.validate()
+            clientSuppliedConfiguration = configuration
+            frameServer.useClientFixtures(Dictionary(uniqueKeysWithValues:
+                configuration.devices.map { ($0.id, $0.source) }))
+            publishClientConfiguration(configuration)
+            sendMockConfigurationResult(ok: true, error: nil)
+            send(["type": "devicesChanged", "devices": currentWireDevices], to: clientFd)
+            log("Client supplied configuration '\(configuration.name)' with \(configuration.devices.count) device(s)")
+        } catch {
+            log("Rejected client configuration: \(error.localizedDescription)")
+            sendMockConfigurationResult(ok: false, error: error.localizedDescription)
+        }
+    }
+
+    private func clearClientSuppliedConfiguration(logChange: Bool) {
+        guard clientSuppliedConfiguration != nil else { return }
+        clientSuppliedConfiguration = nil
+        frameServer.clearClientFixtures()
+        publishClientConfiguration(nil)
+        if logChange {
+            log("Client configuration cleared; serving the menu-bar selection again")
+        }
+    }
+
+    private func sendMockConfigurationResult(ok: Bool, error: String?) {
+        var message: [String: Any] = ["type": "didSetMockConfiguration", "ok": ok]
+        if let error { message["error"] = error }
+        send(message, to: clientFd)
     }
 
     private func send(_ message: [String: Any], to fd: Int32) {
@@ -360,6 +443,12 @@ final class MockCameraServer: ObservableObject {
             if count == 0 {
                 self.previewImage = nil
             }
+        }
+    }
+
+    private func publishClientConfiguration(_ configuration: ClientMockConfiguration?) {
+        DispatchQueue.main.async {
+            self.clientConfiguration = configuration
         }
     }
 

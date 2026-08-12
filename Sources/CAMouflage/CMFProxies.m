@@ -216,7 +216,7 @@ void CMFImmortalize(id object) {
 - (NSArray<NSNumber *> *)availablePreviewPhotoPixelFormatTypes { return @[]; }
 - (BOOL)isFlashEnabled { return NO; }
 - (BOOL)isRedEyeReductionEnabled { return NO; }
-- (NSInteger)expectedPhotoCount { return 1; }
+- (NSUInteger)expectedPhotoCount { return 1; }
 
 @end
 

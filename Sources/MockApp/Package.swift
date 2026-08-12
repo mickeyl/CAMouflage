@@ -20,6 +20,7 @@ let package = Package(
                 "StatusBarController.swift",
                 "Models/AppPreferences.swift",
                 "Models/AppVersion.swift",
+                "Models/ClientMockConfiguration.swift",
                 "Models/FixtureSource.swift",
                 "Models/ProviderMode.swift",
                 "Server/MockCameraServer.swift",

@@ -120,6 +120,10 @@ static int cmf_try_connect(void) {
     if (fd < 0) {
         return -1;
     }
+#ifdef SO_NOSIGPIPE
+    int suppressSIGPIPE = 1;
+    setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &suppressSIGPIPE, sizeof(suppressSIGPIPE));
+#endif
     if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) == 0) {
         gSockFd = fd;
         cmf_start_reader(fd);

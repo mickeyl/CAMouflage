@@ -1,16 +1,20 @@
 import Foundation
 
-/// What the virtual cameras serve. A configuration is deliberately tiny for
-/// the proof of concept: one source feeds both the front and the back camera.
+/// What a virtual camera serves. The menu-bar selection uses one source for
+/// both stock cameras; client-supplied configurations may assign one per device.
 struct FixtureSource: Codable, Equatable {
     enum Kind: String, Codable {
         case testPattern
         case image
         case movie
+        case machineCode
     }
 
     var kind: Kind
     var path: String?
+    var dataBase64: String? = nil
+    var symbology: String? = nil
+    var payload: String? = nil
 
     static let `default` = FixtureSource(kind: .testPattern, path: nil)
 
@@ -19,6 +23,7 @@ struct FixtureSource: Codable, Equatable {
             case .testPattern: "Test Pattern"
             case .image: path.map { ($0 as NSString).lastPathComponent } ?? "Image"
             case .movie: path.map { ($0 as NSString).lastPathComponent } ?? "Movie"
+            case .machineCode: "\(symbology?.uppercased() ?? "QR") · \(payload ?? "")"
         }
     }
 

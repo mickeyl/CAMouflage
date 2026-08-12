@@ -1,7 +1,7 @@
 # CAMouflage — Implementation Plan
 
-> **Status (2026-08-12): proof of concept complete and validated, now with
-> live passthrough.** A real Mac camera (built-in, external UVC, or Continuity
+> **Status (2026-08-12): 0.3.0 Preview.** A real Mac camera (built-in, external
+> UVC, or Continuity
 > Camera) forwards into the simulator through the same sockets that serve mock
 > fixtures. See [§7 Status](#7-status-2026-08-12) for what exists versus what is
 > planned; AGENTS.md records the invariants the implementation established.
@@ -72,13 +72,13 @@ Two-process split, identical to ImpossiBLE, plus a dedicated frame plane:
 ┌──────────────────────────────┐          ┌──────────────────────────────────┐
 │ iOS Simulator app            │          │ macOS host                       │
 │                              │  control │                                  │
-│  AVFoundation API surface    │  (NDJSON)│  camouflage-helper.app           │
-│  ── swizzled at +load ──►    ◄──────────►  (Passthrough: real AVCapture-   │
-│  CMFActivator                │ /tmp/    │   Session on Mac cameras)        │
-│                              │ camouflage│         — or —                  │
-│  CMFConnection (control)     │ .sock    │  CAMouflage-Mock.app             │
-│  CMFFrameStream (frames)     ◄──────────┤  (menu bar app: fixtures,       │
-│                              │  frames  │   Off/Mock/Passthrough control)  │
+│  AVFoundation API surface    │  (NDJSON)│  CAMouflage-Mock.app             │
+│  ── swizzled at +load ──►    ◄──────────►  Mock: fixture producers         │
+│  CMFActivator                │ /tmp/    │  Passthrough: AVCaptureSession   │
+│                              │ camouflage│  on the selected Mac camera     │
+│  CMFConnection (control)     │ .sock    │                                  │
+│  CMFFrameStream (frames)     ◄──────────┤  Off/Mock/Passthrough panel      │
+│                              │  frames  │  + live preview                  │
 │  CMFProxies (shim objects)   │ (binary) │                                  │
 └──────────────────────────────┘ /tmp/    └──────────────────────────────────┘
                                  camouflage-frames.sock
@@ -88,8 +88,9 @@ Two-process split, identical to ImpossiBLE, plus a dedicated frame plane:
 
 Newline-delimited JSON over `/tmp/camouflage.sock` — the exact `CBSConnection`
 pattern: lazy connect on first swizzled instantiation, 2-second auto-reconnect,
-connection state drives `AVAuthorizationStatus`/device availability, single-client
-policy with busy rejection. Port `CBSConnection.m` nearly verbatim.
+connection state drives device availability, and the most recently connected
+simulator app takes over the single provider slot. Port `CBSConnection.m` nearly
+verbatim.
 
 ### Frame plane (the part BLE never needed)
 
@@ -122,8 +123,7 @@ keeps the frame plane stateless).
 | `CMFProxies.m/.h` | shim `AVCaptureDevice`, `AVCaptureDeviceFormat`, `AVCapturePhoto` subclasses |
 | `CMFPreview.m` | `AVCaptureVideoPreviewLayer` internals (hosted `AVSampleBufferDisplayLayer`) |
 | `CMFMetadata.m` | Vision-backed `AVCaptureMetadataOutput` (QR/barcode) |
-| `CMFMockConfiguration.m` | the only public API: client-supplied fixtures |
-| `include/CAMouflage.h` | umbrella header |
+| `include/CAMouflage.h` | public connectivity and client-fixture API |
 
 On device builds everything compiles to no-ops, and the public functions return `NO` —
 same dual-target story as ImpossiBLE.
@@ -137,7 +137,7 @@ same dual-target story as ImpossiBLE.
 | `AVCaptureDevice +authorizationStatusForMediaType:`, `+requestAccessForMediaType:` | video → `authorized` / async `YES` (provider connectivity, not TCC, gates reality); audio untouched |
 | `AVCaptureDeviceInput +deviceInputWithDevice:error:`, `-initWithDevice:error:` | accept proxy devices, wrap without touching the real backend |
 | `AVCaptureSession` add/remove/canAdd inputs & outputs, `startRunning`, `stopRunning`, `sessionPreset`, `beginConfiguration`/`commitConfiguration` | bookkeeping + provider `startSession`/`stopSession`; `running` KVO and `AVCaptureSessionDidStartRunning`/`…DidStopRunning` notifications posted manually |
-| `AVCaptureVideoDataOutput -setSampleBufferDelegate:queue:` | store; frames from `CMFFrameStream` become `CMSampleBuffer`s (`CVPixelBufferCreate` + `CMSampleBufferCreateReadyWithImageBuffer` — all public C API) delivered on the stored queue, with frame dropping when the queue is busy (`alwaysDiscardsLateVideoFrames` honored) |
+| `AVCaptureVideoDataOutput -setSampleBufferDelegate:queue:` | store; frames from `CMFFrameStream` become `CMSampleBuffer`s (`CVPixelBufferPoolCreatePixelBuffer` + `CMSampleBufferCreateReadyWithImageBuffer` — all public C API) delivered on the stored queue, with frame dropping when the queue is busy (`alwaysDiscardsLateVideoFrames` honored) |
 | `AVCaptureConnection` | lightweight shim per input/output pair; `videoRotationAngle` (iOS 17+) / `videoOrientation` (legacy) and `isVideoMirrored` recorded and applied to the frame header interpretation |
 | `AVCaptureVideoPreviewLayer` | swizzle `-initWithSession:`/`setSession:` to install a hosted `AVSampleBufferDisplayLayer` sublayer fed from the same frame tap; map `videoGravity`; implement `captureDevicePointOfInterestForPoint:`/`layerRectConverted…` with the known frame geometry |
 | `AVCapturePhotoOutput -capturePhotoWithSettings:delegate:` | control-plane request; replay the full delegate choreography (`willBeginCapture` → `willCapturePhoto` → `didFinishProcessingPhoto` → `didFinishCapture`) with a `CMFPhoto : AVCapturePhoto` shim overriding `fileDataRepresentation`, `pixelBuffer`, `cgImageRepresentation`, `metadata`, `resolvedSettings` |
@@ -200,29 +200,28 @@ Same envelope style as ImpossiBLE (`type` + payload keys). Core messages:
 
 ```
 client → provider
-  hello                     {clientVersion, bundleId}
+  hello                     {clientVersion, bundleId, pid}
   listDevices               {}
-  startSession              {sessionId, deviceId, width, height, maxFps}
+  startSession              {sessionId, deviceId, maxFps}
   stopSession               {sessionId}
-  capturePhoto              {sessionId, requestId, format: "jpeg"|"heic", flashMode}
-  setControl                {sessionId, control: "zoom"|"focusPOI"|…, value}   // advisory
+  capturePhoto              {sessionId, requestId, format}
   setMockConfiguration      {configuration: {…}}                                // fixtures
   clearMockConfiguration    {}
 
 provider → client
-  didListDevices            {devices: [{id, name, position, deviceType, formats}]}
+  didListDevices            {devices: [{id, name, position}]}
   devicesChanged            {devices: […]}
   didStartSession           {sessionId, ok, error?}
   didStopSession            {sessionId}
-  didCapturePhoto           {requestId, ok, dataBase64, metadata, error?}
+  didCapturePhoto           {requestId, ok, width, height, dataBase64, error?}
   didSetMockConfiguration   {ok, error?}          // fail loudly, like ImpossiBLE
-  busy                      {}                    // second client rejected
+  connectionRejected       {code: "clientBusy"} // previous client was superseded
 ```
 
 Version pinning caveat carries over verbatim: pin the provider alongside the
 library; unknown message types are ignored, not errored.
 
-### Client-supplied configurations (public API, `CMFMockConfiguration.m`)
+### Client-supplied configurations (public API)
 
 ```swift
 import CAMouflage
@@ -249,7 +248,7 @@ Configuration JSON shape (same file format the mock app saves/exports):
 }
 ```
 
-`source.kind` ∈ `image` (base64 or file reference for saved configs), `video`,
+`source.kind` ∈ `image` (base64 or host file reference), `movie`,
 `testPattern`, `machineCode`.
 
 ---
@@ -268,10 +267,8 @@ CAMouflage/
 ├── LICENSE                     # MIT
 ├── Sources/
 │   ├── CAMouflage/             # simulator-side ObjC library (CMF prefix)
-│   ├── Helper/                 # CMFHelperMain.m, Info.plist, entitlements.plist
 │   └── MockApp/                # own Package.swift, Server/ Models/ Views/ Resources/
-├── Tests/CAMouflageTests/      # protocol codec, frame header, shim smoke tests
-└── SampleApp/                  # iOS demo: preview + QR scan + photo capture
+└── SampleApp/                  # iOS demo + client-fixture XCTest target
 ```
 
 Conventions that apply throughout: English comments (WHY only), no attribution
@@ -318,7 +315,7 @@ decode; `CMSampleBuffer` construction with proper timing; delegate delivery on t
 client queue with late-frame dropping; `running` KVO + session notifications;
 connection shims with rotation/mirroring bookkeeping.
 **Validate:** SampleApp renders live frames into a plain `CALayer` at target fps;
-Instruments confirms no per-frame allocations beyond the pool; stopping the helper
+Instruments confirms no per-frame allocations beyond the pool; stopping the provider
 mid-stream stops delivery and flips session state (parity with ImpossiBLE's
 disconnect fidelity).
 
@@ -351,15 +348,14 @@ mid-session ends that session cleanly; `make watch` loop stays usable.
 
 ### Phase 6 — Mock app (3–4 days)
 Port the ImpossiBLE-Mock shell; implement the four fixture sources, the editor,
-stock configurations, persistence, "record fixture from Mac camera", mode
-mutual-exclusion with the helper.
+stock configurations, persistence, and "record fixture from Mac camera".
 **Validate:** Off/Mock/Passthrough switching kills/starts the right daemons;
 SMPTE + timestamp pattern proves liveness at a glance; video loop plays seamlessly;
 panel survives app switches per preference.
 
 ### Phase 7 — Photo output (2 days)
-`capturePhoto` round-trip in both providers (helper: real `AVCapturePhotoOutput`;
-mock: encode current fixture frame at full fixture resolution); `CMFPhoto` shim;
+`capturePhoto` round-trip in both source modes (passthrough or mock: encode the
+current served frame); `CMFPhoto` shim;
 full delegate choreography with correct queue.
 **Validate:** SampleApp captures and displays a still from both modes; shim smoke
 test (`fileDataRepresentation` non-nil, metadata keys present) runs in CI against
@@ -401,7 +397,7 @@ multi-client.
 | Frame-plane throughput or decode cost too high on low-end Macs | dropped frames, hot CPU | JPEG quality/fps negotiation knobs; pixel-buffer pool; v2 zero-copy path already designed into the header format |
 | Session/connection API breadth (KVO, notifications, presets) | subtle app breakage | implement the observable contract (KVO + notifications + getters) first, breadth later; SampleApp exercises the common recipes (Apple's AVCam patterns) as the acceptance bar |
 | Simulator TCC differences across Xcode versions | authorization swizzle mismatch | authorization is fully swizzled for video — we never reach real TCC; covered by a unit test |
-| Two daemons, two sockets, stale state | "why is there no image" support burden | mutual exclusion + status parity with ImpossiBLE; SMPTE test pattern as instant liveness proof; `make status`/`log` targets from day one |
+| Control/frame socket state drifts during takeover | "why is there no image" support burden or SIGPIPE termination | one provider owns both sockets; last-connection-wins cleanup; `SO_NOSIGPIPE` on every socket; SMPTE liveness proof; `make status`/`log` targets |
 
 ---
 
@@ -418,7 +414,7 @@ multi-client.
 
 ## 7. Status (2026-08-12)
 
-The proof of concept was validated end-to-end on the iPhone 16 Pro and
+The 0.3.0 preview was validated end-to-end on the iPhone 16 Pro and
 iPhone 17 simulators: device discovery, stock `AVCaptureVideoPreviewLayer`
 rendering, and `AVCaptureVideoDataOutput` delegate delivery, with all three
 fixture types **and live passthrough** from a real Mac camera (validated
@@ -427,24 +423,19 @@ against a Logitech UVC webcam at 1920×1080). Validation evidence:
 
 | Phase | State | Notes |
 |---|---|---|
-| 0 — Scaffold | ✅ done | No logo yet; no `Tests/` directory yet |
+| 0 — Scaffold | ✅ done | Library, provider, generated sample project, logo and screenshots |
 | 1 — Transport | ✅ done | Header codec unit tests still owed |
 | 2 — Discovery & authorization | ✅ done | Audio APIs pass through untouched |
-| 3 — Session + VideoDataOutput | ✅ done (PoC level) | No `CVPixelBufferPool` reuse, no late-frame dropping yet |
-| 4 — Preview layer | ✅ done (PoC level) | Gravity + layout work; point/rect conversion not implemented |
+| 3 — Session + VideoDataOutput | ✅ done | Per-dimension `CVPixelBufferPool`, `alwaysDiscardsLateVideoFrames`, and automatic session resume after provider reconnect |
+| 4 — Preview layer | ✅ core path | Gravity + layout work; point/rect conversion not implemented |
 | 5 — Passthrough | ✅ done (in mock app) | Real camera enumeration (built-in/external/Continuity/Desk View), selectable source, live device switching, TCC prompt, camera runs only while a client streams. Integrated into the mock app rather than a separate helper (see Phase 5 note). Missing: fps/resolution negotiation, activity snapshot file, JPEG-encoder measurement |
-| 6 — Mock app | 🟡 PoC subset | Test pattern / image / movie fixtures, passthrough source picker, live switching, persistence. Missing: per-device fixtures, stock configurations, capture-from-camera, launch-at-startup |
+| 6 — Mock app | 🟡 preview subset | Test pattern / image / movie fixtures, generated client machine codes, passthrough source picker, live switching, persistence. Missing: per-device editor, stock configurations, capture-from-camera, launch-at-startup |
 | 7 — Photo output | ✅ done | `capturePhoto` round-trip; `CMFPhoto`/`CMFResolvedPhotoSettings` shims; full delegate choreography. Photo is the current fixture/camera frame re-encoded (no separate full-res still yet) |
 | 8 — Metadata via Vision | ✅ done | In-process `VNDetectBarcodesRequest` on delivered frames, throttled ~10 Hz; `AVMetadataMachineReadableCodeObject` shims with stringValue/type/bounds/corners; `rectOfInterest` honored. Simulator needs the classical detector (see notes) |
-| 9 — Client-supplied fixtures | ⬜ not started | `CAMouflageIsProviderConnected()` already public |
-| 10 — Polish & release | 🟡 partial | README, AGENTS.md, screenshot exist |
+| 9 — Client-supplied fixtures | ✅ done | Public set/clear API, ephemeral provider override, read-only panel state, QR generator, and headless SampleApp XCTest |
+| 10 — Polish & release | 🟡 partial | 0.3.0 Preview README, AGENTS.md, logo and screenshots exist; release automation/changelog remain |
 
-Known PoC limitations beyond the table:
-
-- A running `AVCaptureSession` does not resume after a provider restart; the
-  app must call `stopRunning`/`startRunning` again. (This is why a SampleApp
-  left running while the mock app is relaunched shows "no frames yet" until the
-  app restarts its session — it is not a passthrough bug.)
+Current limitations beyond the table:
 - `MovieProducer` uses the deprecated synchronous `tracks(withMediaType:)`
   loading (deliberate — it runs on the frame server's I/O queue); migrate to
   `loadTracks` when touching that file.
@@ -458,11 +449,11 @@ Known PoC limitations beyond the table:
 
 ### Suggested next steps, in order of leverage
 
-1. **Client-supplied fixtures** (phase 9) — small, and makes UI tests possible.
-2. **Passthrough polish** (phase 5 tail) — position mapping (built-in → front,
+1. **Passthrough polish** (phase 5 tail) — position mapping (built-in → front,
    Continuity/external → back), mirroring for front devices, resolution/fps
    negotiation, and reflecting the real device name in the advertised list.
-3. **Photo/metadata polish** — a real full-resolution still for photo capture
-   (rather than the current preview frame), a QR/barcode *generator* fixture in
-   the mock app (so scanning needs no external image), and mapping metadata
-   corners through the preview transform for pixel-accurate overlays.
+2. **Photo/preview polish** — a real full-resolution still for photo capture
+   (rather than the current preview frame) and mapping metadata corners through
+   the preview transform for pixel-accurate overlays.
+3. **Transport test coverage and profiling** — header/NDJSON codec tests, then
+   measure JPEG decode before considering the v2 zero-copy frame plane.

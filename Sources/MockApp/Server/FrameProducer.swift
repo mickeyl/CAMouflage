@@ -20,12 +20,25 @@ func makeFrameProducer(for fixture: FixtureSource) -> FrameProducer {
         case .testPattern:
             return TestPatternProducer()
         case .image:
+            if let encoded = fixture.dataBase64,
+               let data = Data(base64Encoded: encoded),
+               let producer = ImageProducer(data: data) {
+                return producer
+            }
             if let path = fixture.path, let producer = ImageProducer(path: path) {
                 return producer
             }
             return TestPatternProducer()
         case .movie:
             if let path = fixture.path, let producer = MovieProducer(path: path) {
+                return producer
+            }
+            return TestPatternProducer()
+        case .machineCode:
+            if let producer = MachineCodeProducer(
+                symbology: fixture.symbology ?? "qr",
+                payload: fixture.payload ?? ""
+            ) {
                 return producer
             }
             return TestPatternProducer()
@@ -123,12 +136,22 @@ final class ImageProducer: FrameProducer {
 
     init?(path: String) {
         guard let image = NSImage(contentsOfFile: path) else { return nil }
+        guard let frame = Self.makeFrame(from: image) else { return nil }
+        self.frame = frame
+    }
+
+    init?(data: Data) {
+        guard let image = NSImage(data: data), let frame = Self.makeFrame(from: image) else { return nil }
+        self.frame = frame
+    }
+
+    private static func makeFrame(from image: NSImage) -> ProducedFrame? {
         var rect = CGRect(origin: .zero, size: image.size)
         guard let cgImage = image.cgImage(forProposedRect: &rect, context: nil, hints: nil) else { return nil }
 
-        let scaled = Self.scaledDown(cgImage, maxDimension: 1920)
+        let scaled = scaledDown(cgImage, maxDimension: 1920)
         guard let jpeg = jpegData(from: scaled) else { return nil }
-        frame = ProducedFrame(jpeg: jpeg, width: UInt16(scaled.width), height: UInt16(scaled.height))
+        return ProducedFrame(jpeg: jpeg, width: UInt16(scaled.width), height: UInt16(scaled.height))
     }
 
     func nextFrame() -> ProducedFrame? {
@@ -153,6 +176,60 @@ final class ImageProducer: FrameProducer {
         context.draw(image, in: CGRect(x: 0, y: 0, width: newWidth, height: newHeight))
         return context.makeImage() ?? image
     }
+}
+
+// MARK: - Machine Code
+
+final class MachineCodeProducer: FrameProducer {
+    let fps = 5
+    private let frame: ProducedFrame
+
+    init?(symbology: String, payload: String) {
+        guard !payload.isEmpty else { return nil }
+        let filterName: String
+        switch symbology.lowercased() {
+            case "qr": filterName = "CIQRCodeGenerator"
+            case "aztec": filterName = "CIAztecCodeGenerator"
+            case "pdf417": filterName = "CIPDF417BarcodeGenerator"
+            case "code128": filterName = "CICode128BarcodeGenerator"
+            default: return nil
+        }
+        guard let filter = CIFilter(name: filterName) else { return nil }
+        filter.setValue(Data(payload.utf8), forKey: "inputMessage")
+        if filterName == "CIQRCodeGenerator" {
+            filter.setValue("M", forKey: "inputCorrectionLevel")
+        }
+        guard let code = filter.outputImage else { return nil }
+
+        let canvasWidth = 1280
+        let canvasHeight = 720
+        let availableWidth = CGFloat(canvasWidth - 160)
+        let availableHeight = CGFloat(canvasHeight - 120)
+        let scale = max(1, floor(min(availableWidth / code.extent.width,
+                                     availableHeight / code.extent.height)))
+        let scaled = code.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+        let ciContext = CIContext(options: [.useSoftwareRenderer: true])
+        guard let codeImage = ciContext.createCGImage(scaled, from: scaled.extent.integral),
+              let canvas = CGContext(data: nil, width: canvasWidth, height: canvasHeight,
+                                     bitsPerComponent: 8, bytesPerRow: 0,
+                                     space: CGColorSpaceCreateDeviceRGB(),
+                                     bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue |
+                                         CGBitmapInfo.byteOrder32Little.rawValue)
+        else {
+            return nil
+        }
+        canvas.setFillColor(CGColor(gray: 1, alpha: 1))
+        canvas.fill(CGRect(x: 0, y: 0, width: canvasWidth, height: canvasHeight))
+        canvas.interpolationQuality = .none
+        let origin = CGPoint(x: (CGFloat(canvasWidth) - CGFloat(codeImage.width)) / 2,
+                             y: (CGFloat(canvasHeight) - CGFloat(codeImage.height)) / 2)
+        canvas.draw(codeImage, in: CGRect(origin: origin,
+                                         size: CGSize(width: codeImage.width, height: codeImage.height)))
+        guard let image = canvas.makeImage(), let jpeg = jpegData(from: image, quality: 0.95) else { return nil }
+        frame = ProducedFrame(jpeg: jpeg, width: UInt16(canvasWidth), height: UInt16(canvasHeight))
+    }
+
+    func nextFrame() -> ProducedFrame? { frame }
 }
 
 // MARK: - Looping Movie

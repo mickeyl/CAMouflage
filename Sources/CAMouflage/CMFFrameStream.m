@@ -33,6 +33,8 @@ static CMFFrameHandler gFrameHandler;
 static NSMutableDictionary<NSNumber *, dispatch_queue_t> *gStreamQueues;
 static NSMutableDictionary<NSNumber *, NSNumber *> *gStreamFds;
 static dispatch_queue_t gControlQueue;
+static NSMutableDictionary<NSString *, id> *gPixelBufferPools;
+static dispatch_queue_t gPixelBufferPoolQueue;
 
 static dispatch_queue_t cmf_frame_control_queue(void) {
     static dispatch_once_t once;
@@ -45,6 +47,47 @@ static dispatch_queue_t cmf_frame_control_queue(void) {
 }
 
 #pragma mark - JPEG → CMSampleBuffer
+
+static CVPixelBufferPoolRef cmf_pixel_buffer_pool(size_t width, size_t height) {
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        gPixelBufferPools = [NSMutableDictionary dictionary];
+        gPixelBufferPoolQueue = dispatch_queue_create("camouflage.pixel-buffer-pools", DISPATCH_QUEUE_SERIAL);
+    });
+
+    NSString *key = [NSString stringWithFormat:@"%zux%zu", width, height];
+    __block CVPixelBufferPoolRef pool = NULL;
+    dispatch_sync(gPixelBufferPoolQueue, ^{
+        pool = (__bridge CVPixelBufferPoolRef)gPixelBufferPools[key];
+        if (pool) return;
+
+        NSDictionary *poolAttributes = @{
+            (id)kCVPixelBufferPoolMinimumBufferCountKey: @3,
+        };
+        // IOSurface-backed allocation is deliberately omitted. Some simulator
+        // runtimes reject BGRA IOSurfaces before falling back, logging -6680 for
+        // every frame. The hosted display layer accepts these pooled CPU buffers.
+        NSDictionary *pixelAttributes = @{
+            (id)kCVPixelBufferPixelFormatTypeKey: @(kCVPixelFormatType_32BGRA),
+            (id)kCVPixelBufferWidthKey: @(width),
+            (id)kCVPixelBufferHeightKey: @(height),
+            (id)kCVPixelBufferBytesPerRowAlignmentKey: @64,
+            (id)kCVPixelBufferCGImageCompatibilityKey: @YES,
+            (id)kCVPixelBufferCGBitmapContextCompatibilityKey: @YES,
+        };
+        CVPixelBufferPoolRef newPool = NULL;
+        CVReturn result = CVPixelBufferPoolCreate(kCFAllocatorDefault,
+                                                  (__bridge CFDictionaryRef)poolAttributes,
+                                                  (__bridge CFDictionaryRef)pixelAttributes,
+                                                  &newPool);
+        if (result == kCVReturnSuccess && newPool) {
+            gPixelBufferPools[key] = (__bridge id)newPool;
+            pool = newPool;
+            CFRelease(newPool);
+        }
+    });
+    return pool;
+}
 
 static CVPixelBufferRef cmf_pixel_buffer_from_jpeg(NSData *jpeg, size_t *outWidth, size_t *outHeight) {
     CGImageSourceRef source = CGImageSourceCreateWithData((__bridge CFDataRef)jpeg, NULL);
@@ -60,15 +103,11 @@ static CVPixelBufferRef cmf_pixel_buffer_from_jpeg(NSData *jpeg, size_t *outWidt
     size_t width = CGImageGetWidth(image);
     size_t height = CGImageGetHeight(image);
 
-    NSDictionary *attrs = @{
-        (id)kCVPixelBufferIOSurfacePropertiesKey: @{},
-        (id)kCVPixelBufferCGImageCompatibilityKey: @YES,
-        (id)kCVPixelBufferCGBitmapContextCompatibilityKey: @YES,
-    };
     CVPixelBufferRef pixelBuffer = NULL;
-    CVReturn result = CVPixelBufferCreate(kCFAllocatorDefault, width, height,
-                                          kCVPixelFormatType_32BGRA,
-                                          (__bridge CFDictionaryRef)attrs, &pixelBuffer);
+    CVPixelBufferPoolRef pool = cmf_pixel_buffer_pool(width, height);
+    CVReturn result = pool
+        ? CVPixelBufferPoolCreatePixelBuffer(kCFAllocatorDefault, pool, &pixelBuffer)
+        : kCVReturnInvalidArgument;
     if (result != kCVReturnSuccess || !pixelBuffer) {
         CGImageRelease(image);
         return NULL;
@@ -204,6 +243,10 @@ void CMFFrameStreamStart(uint32_t sessionId) {
         if (fd < 0) {
             return;
         }
+#ifdef SO_NOSIGPIPE
+        int suppressSIGPIPE = 1;
+        setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &suppressSIGPIPE, sizeof(suppressSIGPIPE));
+#endif
         if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) != 0) {
             NSLog(@"CAMouflage: frame socket connect failed for session %u", sessionId);
             close(fd);

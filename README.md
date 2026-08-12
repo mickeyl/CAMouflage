@@ -10,7 +10,7 @@ The iOS Simulator has no camera: `AVCaptureDevice` discovery returns nothing,
 sessions never produce frames, and every scan/photo/video flow is untestable
 without a real device. CAMouflage disguises a fake capture pipeline as the real
 one — transparently bridging AVFoundation capture from a simulated app to
-configurable mock fixtures (and, later, to actual camera hardware on the host Mac).
+configurable mock fixtures or actual camera hardware on the host Mac.
 
 Sibling project to [ImpossiBLE](https://github.com/mickeyl/ImpossiBLE). Same
 philosophy, same integration story: add a local Swift package, build, run. No
@@ -18,13 +18,15 @@ philosophy, same integration story: add a local Swift package, build, run. No
 test. The one intentional divergence is where the passthrough logic lives — see
 the [architecture note](#architecture-note) under How It Works.
 
-> **Status: proof of concept.** Mock **and passthrough** modes work — a menu bar
+> **Status: 0.3.0 Preview.** Mock **and passthrough** modes work — a menu bar
 > app serves either a fixture (test pattern, static image, or looping movie) or a
 > live feed from a real Mac camera (built-in, external UVC, or Continuity Camera)
 > as the simulator's front and back cameras, rendered through stock
 > `AVCaptureVideoPreviewLayer` and delivered to `AVCaptureVideoDataOutput`
 > delegates, with working **photo capture** (`AVCapturePhotoOutput`) and
 > **QR/barcode scanning** (`AVCaptureMetadataOutput`, in-process via Vision).
+> Tests can also upload ephemeral per-device image or generated machine-code
+> fixtures without changing the user's menu-bar selection.
 > See [PLAN.md](PLAN.md) for the full roadmap.
 
 <p align="center">
@@ -118,6 +120,38 @@ defaults write de.vanille.camouflage-mock ServerEnabled -bool true
 mock-relaunch` rebuilds a debug bundle and restarts the running app; `make
 log` tails its output; `make status` / `make mock-stop` manage the process.
 
+### Test-owned fixtures
+
+UI and integration tests can own their camera input instead of depending on the
+menu-bar selection. The configuration is visible in the provider panel, is never
+persisted, survives a provider restart within the same test process, and is
+cleared when that process disconnects:
+
+```swift
+import CAMouflage
+
+let configuration = try JSONSerialization.data(withJSONObject: [
+    "name": "QR login",
+    "devices": [[
+        "id": "login-camera",
+        "name": "Login QR",
+        "position": "back",
+        "source": [
+            "kind": "machineCode",
+            "symbology": "qr",
+            "payload": "https://example.test/login",
+        ],
+    ]],
+])
+
+precondition(CAMouflageSetMockConfiguration(configuration), "CAMouflage provider unavailable")
+defer { CAMouflageClearMockConfiguration() }
+```
+
+The bundled `SampleAppTests` target demonstrates the complete headless path:
+upload a QR fixture, discover its virtual camera, start `AVCaptureSession`, and
+assert the `AVCaptureMetadataOutput` callback.
+
 ## Requirements
 
 - macOS 15+
@@ -130,11 +164,11 @@ log` tails its output; `make status` / `make mock-stop` manage the process.
 |---|---|
 | `Sources/CAMouflage` | Simulator-side library (Objective-C, `CMF` prefix) |
 | `Sources/MockApp` | `CAMouflage-Mock.app` menu bar provider (SwiftPM) |
-| `SampleApp` | xcodegen demo app (preview + frame counter) |
+| `SampleApp` | xcodegen demo and client-owned QR fixture XCTest |
 | `PLAN.md` | Full roadmap and per-phase status |
 | `AGENTS.md` | Architecture invariants, wire protocol, validation recipe |
 
-## Limitations (proof of concept)
+## Current limitations
 
 - Preview, sample buffers, photo capture, and QR/barcode scanning work; movie
   recording (`AVCaptureMovieFileOutput`) does not yet.
@@ -143,9 +177,9 @@ log` tails its output; `make status` / `make mock-stop` manage the process.
 - Passthrough forwards the camera's native format re-encoded as JPEG; it does
   not yet honor a requested resolution/fps, mirror front cameras, or map
   built-in/Continuity devices to specific front/back positions.
-- One source feeds both virtual cameras; a running session must be restarted by
-  the app after the provider restarts.
-- Single simulator client at a time.
+- The menu-bar selection feeds both stock virtual cameras; client-supplied test
+  configurations can provide distinct per-device sources.
+- One simulator client at a time; the most recently connected app takes over.
 
 ## License
 

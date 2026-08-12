@@ -2,6 +2,11 @@ import Foundation
 
 private let kFrameSocketPath = "/tmp/camouflage-frames.sock"
 
+private func suppressFrameSIGPIPE(on fd: Int32) {
+    var enabled: Int32 = 1
+    setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &enabled, socklen_t(MemoryLayout.size(ofValue: enabled)))
+}
+
 /// Serves length-prefixed JPEG frames to simulator clients. One connection per
 /// capture session: the client sends a one-line JSON hello naming its session,
 /// then frames flow until either side closes. All state lives on `ioQueue`.
@@ -12,8 +17,15 @@ final class FrameServer {
     private var serverFd: Int32 = -1
     private var acceptSource: DispatchSourceRead?
     private var authorizedSessions = Set<UInt32>()
+    private var sessionDeviceIDs: [UInt32: String] = [:]
     private var streams: [UInt32: Stream] = [:]
-    private var fixture: FixtureSource = .restore()
+    private var baseSource: BaseSource = .fixture(.restore())
+    private var clientFixturesByDeviceID: [String: FixtureSource]?
+
+    private enum BaseSource {
+        case fixture(FixtureSource)
+        case passthrough(deviceID: String?)
+    }
 
     /// Non-nil while passthrough is the active source: all streams read frames
     /// from this shared real-camera capture instead of a fixture. The camera
@@ -51,6 +63,7 @@ final class FrameServer {
                 NSLog("CAMouflage-Mock: frame socket() failed")
                 return
             }
+            suppressFrameSIGPIPE(on: fd)
             unlink(kFrameSocketPath)
 
             var addr = sockaddr_un()
@@ -94,7 +107,10 @@ final class FrameServer {
             }
             streams.removeAll()
             authorizedSessions.removeAll()
+            sessionDeviceIDs.removeAll()
+            clientFixturesByDeviceID = nil
             cameraSource?.stop()
+            cameraSource = nil
 
             acceptSource?.cancel()
             acceptSource = nil
@@ -105,15 +121,18 @@ final class FrameServer {
         }
     }
 
-    func authorize(sessionId: UInt32) {
+    func authorize(sessionId: UInt32, deviceID: String, completion: (() -> Void)? = nil) {
         ioQueue.async { [self] in
             authorizedSessions.insert(sessionId)
+            sessionDeviceIDs[sessionId] = deviceID
+            completion?()
         }
     }
 
     func revoke(sessionId: UInt32) {
         ioQueue.async { [self] in
             authorizedSessions.remove(sessionId)
+            sessionDeviceIDs.removeValue(forKey: sessionId)
             if let stream = streams.removeValue(forKey: sessionId) {
                 stream.timer?.cancel()
                 close(stream.fd)
@@ -131,6 +150,7 @@ final class FrameServer {
                 }
             }
             authorizedSessions.removeAll()
+            sessionDeviceIDs.removeAll()
             updateCameraRunState()
         }
     }
@@ -148,9 +168,8 @@ final class FrameServer {
     /// releases any real camera held for passthrough.
     func useFixture(_ fixture: FixtureSource) {
         ioQueue.async { [self] in
-            cameraSource?.stop()
-            cameraSource = nil
-            self.fixture = fixture
+            baseSource = .fixture(fixture)
+            configureBaseSource()
             rebuildProducers()
         }
     }
@@ -159,28 +178,66 @@ final class FrameServer {
     /// forwarded device and starts/stops the camera to match stream demand.
     func usePassthrough(deviceID: String?) {
         ioQueue.async { [self] in
-            let source = cameraSource ?? CameraCaptureSource()
-            cameraSource = source
-            source.select(deviceID: deviceID)
-            updateCameraRunState()
+            baseSource = .passthrough(deviceID: deviceID)
+            configureBaseSource()
+            rebuildProducers()
+        }
+    }
+
+    /// Temporarily replaces the menu-bar source with per-device fixtures. The
+    /// override is connection-scoped and is never persisted.
+    func useClientFixtures(_ fixtures: [String: FixtureSource]) {
+        ioQueue.async { [self] in
+            clientFixturesByDeviceID = fixtures
+            configureBaseSource()
+            rebuildProducers()
+        }
+    }
+
+    func clearClientFixtures() {
+        ioQueue.async { [self] in
+            guard clientFixturesByDeviceID != nil else { return }
+            clientFixturesByDeviceID = nil
+            configureBaseSource()
             rebuildProducers()
         }
     }
 
     // MARK: - Source plumbing (ioQueue)
 
-    private func makeProducer() -> FrameProducer {
+    private func makeProducer(for sessionId: UInt32) -> FrameProducer {
+        if let clientFixturesByDeviceID {
+            if let deviceID = sessionDeviceIDs[sessionId],
+               let fixture = clientFixturesByDeviceID[deviceID] {
+                return makeFrameProducer(for: fixture)
+            }
+            return TestPatternProducer()
+        }
         if let cameraSource {
             return PassthroughFrameProducer(source: cameraSource)
         }
-        return makeFrameProducer(for: fixture)
+        if case let .fixture(fixture) = baseSource {
+            return makeFrameProducer(for: fixture)
+        }
+        return TestPatternProducer()
     }
 
     private func rebuildProducers() {
         for stream in streams.values {
-            stream.producer = makeProducer()
+            stream.producer = makeProducer(for: stream.sessionId)
             startTimer(for: stream)
         }
+    }
+
+    private func configureBaseSource() {
+        cameraSource?.stop()
+        cameraSource = nil
+        guard clientFixturesByDeviceID == nil else { return }
+        guard case let .passthrough(deviceID) = baseSource else { return }
+        let source = CameraCaptureSource()
+        cameraSource = source
+        source.select(deviceID: deviceID)
+        updateCameraRunState()
     }
 
     /// The real camera should only run — and light its LED — while a simulator
@@ -199,6 +256,7 @@ final class FrameServer {
     private func acceptClient() {
         let fd = accept(serverFd, nil, nil)
         guard fd >= 0 else { return }
+        suppressFrameSIGPIPE(on: fd)
 
         // The hello line is tiny and arrives immediately; a bounded blocking
         // read keeps the handshake simple.
@@ -230,7 +288,7 @@ final class FrameServer {
             close(existing.fd)
         }
 
-        let stream = Stream(sessionId: sessionId, fd: fd, producer: makeProducer())
+        let stream = Stream(sessionId: sessionId, fd: fd, producer: makeProducer(for: sessionId))
         streams[sessionId] = stream
         updateCameraRunState()
         startTimer(for: stream)

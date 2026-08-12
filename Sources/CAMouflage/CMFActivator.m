@@ -19,6 +19,7 @@ static void *kCMFPreviewLayersKey = &kCMFPreviewLayersKey;
 static void *kCMFDisplayLayerKey = &kCMFDisplayLayerKey;
 static void *kCMFSBDelegateKey = &kCMFSBDelegateKey;
 static void *kCMFSBQueueKey = &kCMFSBQueueKey;
+static void *kCMFSBDeliveringKey = &kCMFSBDeliveringKey;
 static void *kCMFOutputConnectionKey = &kCMFOutputConnectionKey;
 static void *kCMFLayerConnectionKey = &kCMFLayerConnectionKey;
 
@@ -36,6 +37,29 @@ static dispatch_queue_t gStateQueue;
 static NSMutableDictionary<NSNumber *, NSDictionary *> *gPhotoRequests;
 static uint32_t gNextRequestId = 0;
 static dispatch_queue_t gPhotoQueue;
+static NSDictionary *gClientMockConfiguration;
+
+static CMFCaptureDevice *cmf_session_shim_device(AVCaptureSession *session);
+
+static NSDictionary<NSNumber *, AVCaptureSession *> *cmf_sessions_snapshot(void) {
+    __block NSMutableDictionary<NSNumber *, AVCaptureSession *> *snapshot;
+    dispatch_sync(gStateQueue, ^{
+        snapshot = [NSMutableDictionary dictionary];
+        for (NSNumber *sessionId in [[gSessionsById keyEnumerator] allObjects]) {
+            AVCaptureSession *session = [gSessionsById objectForKey:sessionId];
+            if (session) snapshot[sessionId] = session;
+        }
+    });
+    return snapshot;
+}
+
+static AVCaptureSession *cmf_session_for_id(NSNumber *sessionId) {
+    __block AVCaptureSession *session;
+    dispatch_sync(gStateQueue, ^{
+        session = [gSessionsById objectForKey:sessionId];
+    });
+    return session;
+}
 
 #pragma mark - Device Registry
 
@@ -70,6 +94,22 @@ static void cmf_update_devices(NSArray *wireDevices) {
     }
 }
 
+static void cmf_resume_running_sessions(void) {
+    for (NSNumber *sessionId in cmf_sessions_snapshot()) {
+        AVCaptureSession *session = cmf_session_for_id(sessionId);
+        if (!session || ![objc_getAssociatedObject(session, kCMFRunningKey) boolValue]) continue;
+        CMFCaptureDevice *device = cmf_session_shim_device(session);
+        if (!device) continue;
+        CMFConnectionSend(@{
+            @"type": @"startSession",
+            @"sessionId": sessionId,
+            @"deviceId": device.shimUniqueID,
+            @"maxFps": @15,
+        });
+        NSLog(@"CAMouflage: resuming session %@ after provider reconnect", sessionId);
+    }
+}
+
 static NSArray<CMFCaptureDevice *> *cmf_current_devices(void) {
     __block NSArray *devices;
     dispatch_sync(gStateQueue, ^{
@@ -81,7 +121,7 @@ static NSArray<CMFCaptureDevice *> *cmf_current_devices(void) {
 #pragma mark - Frame Routing
 
 static void cmf_route_frame(uint32_t sessionId, CMSampleBufferRef sampleBuffer) {
-    AVCaptureSession *session = [gSessionsById objectForKey:@(sessionId)];
+    AVCaptureSession *session = cmf_session_for_id(@(sessionId));
     if (!session) return;
     if (![objc_getAssociatedObject(session, kCMFRunningKey) boolValue]) return;
 
@@ -110,10 +150,20 @@ static void cmf_route_frame(uint32_t sessionId, CMSampleBufferRef sampleBuffer) 
             connection = [CMFCaptureConnection connectionShim];
             objc_setAssociatedObject(output, kCMFOutputConnectionKey, connection, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         }
+        BOOL dropsLateFrames = ((AVCaptureVideoDataOutput *)output).alwaysDiscardsLateVideoFrames;
+        if (dropsLateFrames && [objc_getAssociatedObject(output, kCMFSBDeliveringKey) boolValue]) {
+            continue;
+        }
+        if (dropsLateFrames) {
+            objc_setAssociatedObject(output, kCMFSBDeliveringKey, @YES, OBJC_ASSOCIATION_RETAIN);
+        }
         CFRetain(sampleBuffer);
         dispatch_async(queue, ^{
             [delegate captureOutput:output didOutputSampleBuffer:sampleBuffer fromConnection:connection];
             CFRelease(sampleBuffer);
+            if (dropsLateFrames) {
+                objc_setAssociatedObject(output, kCMFSBDeliveringKey, @NO, OBJC_ASSOCIATION_RETAIN);
+            }
         });
     }
 
@@ -136,6 +186,9 @@ static void cmf_handle_message(NSDictionary *msg) {
     NSString *type = msg[@"type"];
     if ([type isEqualToString:@"didListDevices"] || [type isEqualToString:@"devicesChanged"]) {
         cmf_update_devices(msg[@"devices"] ?: @[]);
+        if ([type isEqualToString:@"didListDevices"]) {
+            cmf_resume_running_sessions();
+        }
         return;
     }
     if ([type isEqualToString:@"didStartSession"]) {
@@ -155,10 +208,18 @@ static void cmf_handle_message(NSDictionary *msg) {
         cmf_photo_handle_response(msg);
         return;
     }
+    if ([type isEqualToString:@"didSetMockConfiguration"]) {
+        if ([msg[@"ok"] boolValue]) {
+            NSLog(@"CAMouflage: client mock configuration accepted");
+        } else {
+            NSLog(@"CAMouflage: client mock configuration rejected: %@", msg[@"error"]);
+        }
+        return;
+    }
 }
 
 static void cmf_handle_provider_disconnect(void) {
-    for (NSNumber *sessionId in [[gSessionsById keyEnumerator] allObjects]) {
+    for (NSNumber *sessionId in cmf_sessions_snapshot()) {
         CMFFrameStreamStop(sessionId.unsignedIntValue);
     }
 }
@@ -177,10 +238,20 @@ static void cmf_ensure_connection_open(void) {
                 NSDictionary *info = NSBundle.mainBundle.infoDictionary;
                 CMFConnectionSend(@{
                     @"type": @"hello",
-                    @"clientVersion": @"0.1.0",
+                    @"clientVersion": @"0.3.0",
                     @"bundleId": info[@"CFBundleIdentifier"] ?: @"unknown",
                     @"pid": @(getpid()),
                 });
+                __block NSDictionary *configuration;
+                dispatch_sync(gStateQueue, ^{
+                    configuration = gClientMockConfiguration;
+                });
+                if (configuration) {
+                    CMFConnectionSend(@{
+                        @"type": @"setMockConfiguration",
+                        @"configuration": configuration,
+                    });
+                }
                 CMFConnectionSend(@{@"type": @"listDevices"});
             } else {
                 cmf_handle_provider_disconnect();
@@ -460,9 +531,12 @@ static void cmf_start_running(id self, SEL _cmd) {
 
     CMFCaptureDevice *device = cmf_session_shim_device(self);
     if (device) {
-        uint32_t sessionId = ++gNextSessionId;
+        __block uint32_t sessionId;
+        dispatch_sync(gStateQueue, ^{
+            sessionId = ++gNextSessionId;
+            [gSessionsById setObject:self forKey:@(sessionId)];
+        });
         objc_setAssociatedObject(self, kCMFSessionIdKey, @(sessionId), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-        [gSessionsById setObject:self forKey:@(sessionId)];
         CMFConnectionSend(@{
             @"type": @"startSession",
             @"sessionId": @(sessionId),
@@ -488,7 +562,9 @@ static void cmf_stop_running(id self, SEL _cmd) {
     if (sessionId) {
         CMFConnectionSend(@{@"type": @"stopSession", @"sessionId": sessionId});
         CMFFrameStreamStop(sessionId.unsignedIntValue);
-        [gSessionsById removeObjectForKey:sessionId];
+        dispatch_sync(gStateQueue, ^{
+            [gSessionsById removeObjectForKey:sessionId];
+        });
         objc_setAssociatedObject(self, kCMFSessionIdKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     }
     [self willChangeValueForKey:@"running"];
@@ -529,8 +605,9 @@ static dispatch_queue_t cmf_get_sb_queue(id self, SEL _cmd) {
 // a capturePhoto request to the right session's frame source.
 static uint32_t cmf_session_id_for_output(AVCaptureOutput *output) {
     uint32_t result = 0;
-    for (NSNumber *sessionId in [[gSessionsById keyEnumerator] allObjects]) {
-        AVCaptureSession *session = [gSessionsById objectForKey:sessionId];
+    NSDictionary<NSNumber *, AVCaptureSession *> *sessions = cmf_sessions_snapshot();
+    for (NSNumber *sessionId in sessions) {
+        AVCaptureSession *session = sessions[sessionId];
         if (!session) continue;
         NSArray *outputs = objc_getAssociatedObject(session, kCMFOutputsKey);
         if ([outputs containsObject:output]) {
@@ -702,6 +779,38 @@ BOOL CAMouflageIsProviderConnected(void) {
     return CMFConnectionIsConnected();
 }
 
+BOOL CAMouflageSetMockConfiguration(NSData *configurationJSON) {
+    if (configurationJSON.length == 0) return NO;
+
+    NSError *error = nil;
+    id configuration = [NSJSONSerialization JSONObjectWithData:configurationJSON options:0 error:&error];
+    if (![configuration isKindOfClass:NSDictionary.class]) {
+        NSLog(@"CAMouflage: mock configuration is not a JSON object: %@", error);
+        return NO;
+    }
+    if (!CAMouflageIsProviderConnected()) {
+        NSLog(@"CAMouflage: no provider connected; mock configuration not sent");
+        return NO;
+    }
+
+    dispatch_sync(gStateQueue, ^{
+        gClientMockConfiguration = [configuration copy];
+    });
+    CMFConnectionSend(@{
+        @"type": @"setMockConfiguration",
+        @"configuration": configuration,
+    });
+    return YES;
+}
+
+void CAMouflageClearMockConfiguration(void) {
+    dispatch_sync(gStateQueue, ^{
+        gClientMockConfiguration = nil;
+    });
+    if (!CMFConnectionIsConnected()) return;
+    CMFConnectionSend(@{@"type": @"clearMockConfiguration"});
+}
+
 #pragma mark - +load Entry Point
 
 @interface CMFActivator : NSObject
@@ -782,5 +891,7 @@ BOOL CAMouflageIsProviderConnected(void) {
 #else
 
 BOOL CAMouflageIsProviderConnected(void) { return NO; }
+BOOL CAMouflageSetMockConfiguration(NSData *configurationJSON) { return NO; }
+void CAMouflageClearMockConfiguration(void) {}
 
 #endif

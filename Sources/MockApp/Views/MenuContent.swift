@@ -14,21 +14,29 @@ struct MenuContent: View {
             header
             modePicker
             Divider()
-            switch controller.mode {
-                case .mock:
-                    fixtureSection
-                    Divider()
-                    previewSection
-                    Divider()
-                    statusSection
-                case .passthrough:
-                    passthroughSection
-                    Divider()
-                    previewSection
-                    Divider()
-                    statusSection
-                case .off:
-                    offSection
+            if let configuration = server.clientConfiguration {
+                clientConfigurationSection(configuration)
+                Divider()
+                previewSection
+                Divider()
+                statusSection
+            } else {
+                switch controller.mode {
+                    case .mock:
+                        fixtureSection
+                        Divider()
+                        previewSection
+                        Divider()
+                        statusSection
+                    case .passthrough:
+                        passthroughSection
+                        Divider()
+                        previewSection
+                        Divider()
+                        statusSection
+                    case .off:
+                        offSection
+                }
             }
             Spacer(minLength: 0)
             footer
@@ -107,6 +115,34 @@ struct MenuContent: View {
                 pickFile(types: [.movie, .mpeg4Movie, .quickTimeMovie]) { url in
                     server.fixture = FixtureSource(kind: .movie, path: url.path)
                 }
+            case .machineCode:
+                break
+        }
+    }
+
+    private func clientConfigurationSection(_ configuration: ClientMockConfiguration) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label("Controlled by simulator app", systemImage: "iphone.and.arrow.forward")
+                .font(.headline)
+            Text(configuration.name)
+                .font(.callout.weight(.medium))
+            ForEach(configuration.devices) { device in
+                HStack {
+                    Image(systemName: device.position == "front" ? "person.crop.rectangle" : "camera")
+                        .foregroundStyle(.secondary)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(device.name)
+                        Text(device.source.displayName)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                    Spacer()
+                }
+            }
+            Text("This temporary test configuration is discarded when the simulator app disconnects.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
         }
     }
 

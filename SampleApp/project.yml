@@ -23,3 +23,15 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: de.vanille.camouflage-sample
         TARGETED_DEVICE_FAMILY: "1"
         CODE_SIGNING_ALLOWED: "NO"
+  SampleAppTests:
+    type: bundle.unit-test
+    platform: iOS
+    deploymentTarget: "16.0"
+    sources: [Tests]
+    dependencies:
+      - package: CAMouflage
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: de.vanille.camouflage-sample-tests
+        TARGETED_DEVICE_FAMILY: "1"
+        CODE_SIGNING_ALLOWED: "NO"
