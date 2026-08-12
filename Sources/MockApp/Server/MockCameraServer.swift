@@ -301,6 +301,24 @@ final class MockCameraServer: ObservableObject {
                 send(["type": "didStopSession", "sessionId": sessionId], to: clientFd)
                 log("Session \(sessionId) stopped")
 
+            case "capturePhoto":
+                guard let sessionId = (message["sessionId"] as? NSNumber)?.uint32Value,
+                      let requestId = (message["requestId"] as? NSNumber)?.uint32Value else { return }
+                frameServer.captureStill(sessionId: sessionId) { [weak self] frame in
+                    guard let self else { return }
+                    self.ioQueue.async {
+                        if let frame {
+                            self.send(["type": "didCapturePhoto", "sessionId": sessionId, "requestId": requestId,
+                                       "ok": true, "width": frame.width, "height": frame.height,
+                                       "dataBase64": frame.jpeg.base64EncodedString()], to: self.clientFd)
+                            self.log("Photo \(requestId) captured (\(frame.width)×\(frame.height))")
+                        } else {
+                            self.send(["type": "didCapturePhoto", "requestId": requestId, "ok": false,
+                                       "error": "no frame available for session \(sessionId)"], to: self.clientFd)
+                        }
+                    }
+                }
+
             default:
                 log("Ignoring unknown message type \(type)")
         }

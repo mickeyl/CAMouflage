@@ -135,6 +135,15 @@ final class FrameServer {
         }
     }
 
+    /// Grabs a single still for a photo-capture request: the current frame from
+    /// that session's producer (the fixture frame, or the latest camera frame in
+    /// passthrough). Completion runs on `ioQueue`.
+    func captureStill(sessionId: UInt32, completion: @escaping (ProducedFrame?) -> Void) {
+        ioQueue.async { [self] in
+            completion(streams[sessionId]?.producer.nextFrame())
+        }
+    }
+
     /// Serve a fixture (mock mode). Live-switches every running stream and
     /// releases any real camera held for passthrough.
     func useFixture(_ fixture: FixtureSource) {

@@ -1,6 +1,7 @@
 #import "CMFProxies.h"
 #import <objc/runtime.h>
 #import <objc/message.h>
+#import <ImageIO/ImageIO.h>
 
 #if TARGET_OS_SIMULATOR
 
@@ -184,6 +185,101 @@ void CMFImmortalize(id object) {
 - (void)setAutomaticallyAdjustsVideoMirroring:(BOOL)automatically {}
 
 - (BOOL)isVideoStabilizationSupported { return NO; }
+
+@end
+
+#pragma mark - CMFResolvedPhotoSettings
+
+@implementation CMFResolvedPhotoSettings {
+    int64_t _uid;
+    CMVideoDimensions _dims;
+}
+
++ (instancetype)resolvedSettingsWithUniqueID:(int64_t)uniqueID {
+    CMFResolvedPhotoSettings *settings = cmf_nsobject_init([self alloc]);
+    if (settings) {
+        settings->_uid = uniqueID;
+        settings->_dims = (CMVideoDimensions){0, 0};
+        CMFImmortalize(settings);
+    }
+    return settings;
+}
+
+- (void)setShimPhotoDimensions:(CMVideoDimensions)dimensions { _dims = dimensions; }
+
+- (int64_t)uniqueID { return _uid; }
+- (CMVideoDimensions)photoDimensions { return _dims; }
+- (CMVideoDimensions)rawPhotoDimensions { return (CMVideoDimensions){0, 0}; }
+- (CMVideoDimensions)previewDimensions { return (CMVideoDimensions){0, 0}; }
+- (CMVideoDimensions)embeddedThumbnailDimensions { return (CMVideoDimensions){0, 0}; }
+- (CMVideoDimensions)portraitEffectsMatteDimensions { return (CMVideoDimensions){0, 0}; }
+- (NSArray<NSNumber *> *)availablePreviewPhotoPixelFormatTypes { return @[]; }
+- (BOOL)isFlashEnabled { return NO; }
+- (BOOL)isRedEyeReductionEnabled { return NO; }
+- (NSInteger)expectedPhotoCount { return 1; }
+
+@end
+
+#pragma mark - CMFPhoto
+
+@implementation CMFPhoto {
+    NSData *_fileData;
+    int32_t _width;
+    int32_t _height;
+    AVCaptureResolvedPhotoSettings *_resolved;
+    CGImageRef _cgImage;
+}
+
++ (instancetype)photoWithFileData:(NSData *)fileData
+                            width:(int32_t)width
+                           height:(int32_t)height
+                 resolvedSettings:(AVCaptureResolvedPhotoSettings *)resolvedSettings {
+    CMFPhoto *photo = cmf_nsobject_init([self alloc]);
+    if (photo) {
+        photo->_fileData = [fileData copy];
+        photo->_width = width;
+        photo->_height = height;
+        photo->_resolved = resolvedSettings;
+        CMFImmortalize(photo);
+    }
+    return photo;
+}
+
+- (NSData *)fileDataRepresentation { return _fileData; }
+
+// Ownership follows the Get rule: the cached CGImage is never released because
+// the shim is immortal, so returning it unretained is correct.
+- (CGImageRef)CGImageRepresentation {
+    if (!_cgImage && _fileData.length) {
+        CGImageSourceRef source = CGImageSourceCreateWithData((__bridge CFDataRef)_fileData, NULL);
+        if (source) {
+            _cgImage = CGImageSourceCreateImageAtIndex(source, 0, NULL);
+            CFRelease(source);
+        }
+    }
+    return _cgImage;
+}
+
+- (CVPixelBufferRef)pixelBuffer { return NULL; }
+- (CVPixelBufferRef)previewPixelBuffer { return NULL; }
+
+- (NSDictionary *)metadata {
+    if (!_fileData.length) return @{};
+    CGImageSourceRef source = CGImageSourceCreateWithData((__bridge CFDataRef)_fileData, NULL);
+    if (!source) return @{};
+    NSDictionary *properties = (__bridge_transfer NSDictionary *)CGImageSourceCopyPropertiesAtIndex(source, 0, NULL);
+    CFRelease(source);
+    return properties ?: @{};
+}
+
+- (AVCaptureResolvedPhotoSettings *)resolvedSettings { return _resolved; }
+- (NSInteger)photoCount { return 1; }
+- (CMTime)timestamp { return kCMTimeInvalid; }
+- (BOOL)isRawPhoto { return NO; }
+
+- (NSString *)description {
+    return [NSString stringWithFormat:@"<CMFPhoto %dx%d, %lu bytes>", _width, _height, (unsigned long)_fileData.length];
+}
 
 @end
 

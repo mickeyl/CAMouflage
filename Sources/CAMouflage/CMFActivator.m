@@ -29,6 +29,13 @@ static BOOL gDevicesReceived = NO;
 static dispatch_group_t gDevicesGroup;
 static dispatch_queue_t gStateQueue;
 
+// Pending photo captures, keyed by requestId. Guarded by gStateQueue. Delegate
+// callbacks are replayed on gPhotoQueue, mirroring AVFoundation's off-main
+// delivery.
+static NSMutableDictionary<NSNumber *, NSDictionary *> *gPhotoRequests;
+static uint32_t gNextRequestId = 0;
+static dispatch_queue_t gPhotoQueue;
+
 #pragma mark - Device Registry
 
 static AVCaptureDevicePosition cmf_position_from_string(NSString *position) {
@@ -112,6 +119,8 @@ static void cmf_route_frame(uint32_t sessionId, CMSampleBufferRef sampleBuffer) 
 
 #pragma mark - Provider Messages
 
+static void cmf_photo_handle_response(NSDictionary *msg);
+
 static void cmf_handle_message(NSDictionary *msg) {
     NSString *type = msg[@"type"];
     if ([type isEqualToString:@"didListDevices"] || [type isEqualToString:@"devicesChanged"]) {
@@ -129,6 +138,10 @@ static void cmf_handle_message(NSDictionary *msg) {
     }
     if ([type isEqualToString:@"didStopSession"]) {
         CMFFrameStreamStop([msg[@"sessionId"] unsignedIntValue]);
+        return;
+    }
+    if ([type isEqualToString:@"didCapturePhoto"]) {
+        cmf_photo_handle_response(msg);
         return;
     }
 }
@@ -499,6 +512,113 @@ static dispatch_queue_t cmf_get_sb_queue(id self, SEL _cmd) {
     return objc_getAssociatedObject(self, kCMFSBQueueKey);
 }
 
+#pragma mark - AVCapturePhotoOutput
+
+// Which running CAMouflage session owns this output, or 0 if none. Used to route
+// a capturePhoto request to the right session's frame source.
+static uint32_t cmf_session_id_for_output(AVCaptureOutput *output) {
+    uint32_t result = 0;
+    for (NSNumber *sessionId in [[gSessionsById keyEnumerator] allObjects]) {
+        AVCaptureSession *session = [gSessionsById objectForKey:sessionId];
+        if (!session) continue;
+        NSArray *outputs = objc_getAssociatedObject(session, kCMFOutputsKey);
+        if ([outputs containsObject:output]) {
+            result = sessionId.unsignedIntValue;
+            break;
+        }
+    }
+    return result;
+}
+
+static void (*orig_capture_photo)(id, SEL, AVCapturePhotoSettings *, id);
+static void cmf_capture_photo(id self, SEL _cmd, AVCapturePhotoSettings *settings, id delegate) {
+    uint32_t sessionId = cmf_session_id_for_output(self);
+    if (sessionId == 0) {
+        // Not one of our sessions — let the (non-functional) real path handle it.
+        orig_capture_photo(self, _cmd, settings, delegate);
+        return;
+    }
+
+    uint32_t requestId = ++gNextRequestId;
+    int64_t uniqueID = settings ? settings.uniqueID : (int64_t)requestId;
+    CMFResolvedPhotoSettings *resolved = [CMFResolvedPhotoSettings resolvedSettingsWithUniqueID:uniqueID];
+
+    NSDictionary *request = @{
+        @"delegate": delegate ?: [NSNull null],
+        @"output": self,
+        @"resolved": resolved,
+    };
+    dispatch_sync(gStateQueue, ^{
+        gPhotoRequests[@(requestId)] = request;
+    });
+
+    // Front half of the delegate choreography. The serial gPhotoQueue keeps
+    // these ordered before the didFinish* callbacks replayed on the response.
+    AVCapturePhotoOutput *output = self;
+    dispatch_async(gPhotoQueue, ^{
+        if ([delegate respondsToSelector:@selector(captureOutput:willBeginCaptureForResolvedSettings:)]) {
+            [delegate captureOutput:output willBeginCaptureForResolvedSettings:resolved];
+        }
+        if ([delegate respondsToSelector:@selector(captureOutput:willCapturePhotoForResolvedSettings:)]) {
+            [delegate captureOutput:output willCapturePhotoForResolvedSettings:resolved];
+        }
+    });
+
+    CMFConnectionSend(@{
+        @"type": @"capturePhoto",
+        @"sessionId": @(sessionId),
+        @"requestId": @(requestId),
+        @"format": @"jpeg",
+    });
+    NSLog(@"CAMouflage: capturePhoto request %u on session %u", requestId, sessionId);
+}
+
+// On our fake sessions the real output advertises no codecs; fill in JPEG so
+// apps that gate capture on this list proceed.
+static NSArray * (*orig_available_codecs)(id, SEL);
+static NSArray *cmf_available_codecs(id self, SEL _cmd) {
+    NSArray *codecs = orig_available_codecs(self, _cmd);
+    return codecs.count ? codecs : @[AVVideoCodecTypeJPEG];
+}
+
+static void cmf_photo_handle_response(NSDictionary *msg) {
+    uint32_t requestId = [msg[@"requestId"] unsignedIntValue];
+    __block NSDictionary *request = nil;
+    dispatch_sync(gStateQueue, ^{
+        request = gPhotoRequests[@(requestId)];
+        [gPhotoRequests removeObjectForKey:@(requestId)];
+    });
+    if (!request) return;
+
+    id delegateObject = request[@"delegate"];
+    id delegate = (delegateObject == [NSNull null]) ? nil : delegateObject;
+    AVCapturePhotoOutput *output = request[@"output"];
+    CMFResolvedPhotoSettings *resolved = request[@"resolved"];
+
+    BOOL ok = [msg[@"ok"] boolValue];
+    int32_t width = (int32_t)[msg[@"width"] intValue];
+    int32_t height = (int32_t)[msg[@"height"] intValue];
+    [resolved setShimPhotoDimensions:(CMVideoDimensions){width, height}];
+
+    NSData *data = nil;
+    if (ok) {
+        data = [[NSData alloc] initWithBase64EncodedString:(msg[@"dataBase64"] ?: @"") options:0];
+        if (data.length == 0) ok = NO;
+    }
+    NSError *error = ok ? nil : [NSError errorWithDomain:@"CAMouflage" code:1
+                                               userInfo:@{NSLocalizedDescriptionKey: msg[@"error"] ?: @"photo capture failed"}];
+    CMFPhoto *photo = data ? [CMFPhoto photoWithFileData:data width:width height:height resolvedSettings:resolved] : nil;
+
+    dispatch_async(gPhotoQueue, ^{
+        if ([delegate respondsToSelector:@selector(captureOutput:didFinishProcessingPhoto:error:)]) {
+            [delegate captureOutput:output didFinishProcessingPhoto:photo error:error];
+        }
+        if ([delegate respondsToSelector:@selector(captureOutput:didFinishCaptureForResolvedSettings:error:)]) {
+            [delegate captureOutput:output didFinishCaptureForResolvedSettings:resolved error:error];
+        }
+    });
+}
+
 #pragma mark - AVCaptureVideoPreviewLayer
 
 static void cmf_attach_preview_layer(AVCaptureVideoPreviewLayer *layer, AVCaptureSession *session) {
@@ -587,6 +707,8 @@ BOOL CAMouflageIsProviderConnected(void) {
     gDevicesGroup = dispatch_group_create();
     dispatch_group_enter(gDevicesGroup);
     gStateQueue = dispatch_queue_create("camouflage.state", DISPATCH_QUEUE_SERIAL);
+    gPhotoRequests = [NSMutableDictionary dictionary];
+    gPhotoQueue = dispatch_queue_create("camouflage.photo", DISPATCH_QUEUE_SERIAL);
 
     Class device = [AVCaptureDevice class];
     cmf_swizzle_class(device, @selector(devices), (IMP)cmf_devices, (IMP *)&orig_devices);
@@ -627,6 +749,10 @@ BOOL CAMouflageIsProviderConnected(void) {
     cmf_swizzle(videoOutput, @selector(setSampleBufferDelegate:queue:), (IMP)cmf_set_sb_delegate, (IMP *)&orig_set_sb_delegate);
     cmf_swizzle(videoOutput, @selector(sampleBufferDelegate), (IMP)cmf_get_sb_delegate, (IMP *)&orig_get_sb_delegate);
     cmf_swizzle(videoOutput, @selector(sampleBufferCallbackQueue), (IMP)cmf_get_sb_queue, (IMP *)&orig_get_sb_queue);
+
+    Class photoOutput = [AVCapturePhotoOutput class];
+    cmf_swizzle(photoOutput, @selector(capturePhotoWithSettings:delegate:), (IMP)cmf_capture_photo, (IMP *)&orig_capture_photo);
+    cmf_swizzle(photoOutput, @selector(availablePhotoCodecTypes), (IMP)cmf_available_codecs, (IMP *)&orig_available_codecs);
 
     Class previewLayer = [AVCaptureVideoPreviewLayer class];
     cmf_swizzle(previewLayer, @selector(initWithSession:), (IMP)cmf_layer_init_with_session, (IMP *)&orig_layer_init_with_session);

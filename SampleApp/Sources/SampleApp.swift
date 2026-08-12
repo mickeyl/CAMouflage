@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 import AVFoundation
 import CAMouflage
 
@@ -21,27 +22,86 @@ struct ContentView: View {
     @State private var overlaySize = CGSize.zero
     @State private var isDragging = false
 
-    private static let overlayBottomInset: CGFloat = 32
+    private static let overlayBottomInset: CGFloat = 120
 
     var body: some View {
         GeometryReader { proxy in
-            ZStack(alignment: .bottom) {
-                CameraPreview(session: camera.session)
-                    .ignoresSafeArea()
+            ZStack {
+                ZStack(alignment: .bottom) {
+                    CameraPreview(session: camera.session)
+                        .ignoresSafeArea()
 
-                statusOverlay
-                    .onSizeChange { overlaySize = $0 }
-                    .offset(x: overlayOffset.width + dragTranslation.width,
-                            y: overlayOffset.height + dragTranslation.height)
-                    .scaleEffect(isDragging ? 1.04 : 1)
-                    .gesture(dragGesture(in: proxy.size))
-                    .animation(.interactiveSpring(response: 0.3, dampingFraction: 0.72), value: isDragging)
-                    .padding(.bottom, Self.overlayBottomInset)
+                    statusOverlay
+                        .onSizeChange { overlaySize = $0 }
+                        .offset(x: overlayOffset.width + dragTranslation.width,
+                                y: overlayOffset.height + dragTranslation.height)
+                        .scaleEffect(isDragging ? 1.04 : 1)
+                        .gesture(dragGesture(in: proxy.size))
+                        .animation(.interactiveSpring(response: 0.3, dampingFraction: 0.72), value: isDragging)
+                        .padding(.bottom, Self.overlayBottomInset)
+                }
+
+                VStack {
+                    Spacer()
+                    shutterButton
+                        .padding(.bottom, 40)
+                }
+
+                if let image = camera.capturedImage {
+                    photoReview(image)
+                        .transition(.opacity)
+                }
             }
             .frame(width: proxy.size.width, height: proxy.size.height)
+            .animation(.easeInOut(duration: 0.2), value: camera.capturedImage)
         }
         .onAppear {
             camera.start()
+        }
+    }
+
+    private var shutterButton: some View {
+        Button {
+            camera.capturePhoto()
+        } label: {
+            ZStack {
+                Circle().stroke(.white, lineWidth: 4).frame(width: 72, height: 72)
+                Circle().fill(.white).frame(width: 58, height: 58)
+            }
+            .shadow(radius: 4)
+        }
+        .buttonStyle(.plain)
+        .disabled(camera.capturedImage != nil)
+    }
+
+    private func photoReview(_ image: UIImage) -> some View {
+        ZStack {
+            Color.black.ignoresSafeArea()
+            Image(uiImage: image)
+                .resizable()
+                .scaledToFit()
+                .ignoresSafeArea()
+            VStack {
+                HStack {
+                    Spacer()
+                    Button {
+                        camera.capturedImage = nil
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.largeTitle)
+                            .symbolRenderingMode(.palette)
+                            .foregroundStyle(.white, .black.opacity(0.4))
+                            .padding()
+                    }
+                }
+                Spacer()
+                Text("Captured photo · \(Int(image.size.width))×\(Int(image.size.height))")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.white)
+                    .padding(8)
+                    .background(.black.opacity(0.4), in: Capsule())
+                    .padding(.bottom, 44)
+            }
         }
     }
 
@@ -146,9 +206,11 @@ struct CameraPreview: UIViewRepresentable {
 @MainActor
 final class CameraController: NSObject, ObservableObject {
     let session = AVCaptureSession()
+    private let photoOutput = AVCapturePhotoOutput()
 
     @Published var statusText = "Starting…"
     @Published var frameText = "no frames yet"
+    @Published var capturedImage: UIImage?
 
     private let sessionQueue = DispatchQueue(label: "sample.session")
     private let videoQueue = DispatchQueue(label: "sample.video")
@@ -158,6 +220,13 @@ final class CameraController: NSObject, ObservableObject {
     func start() {
         sessionQueue.async { [self] in
             configure()
+        }
+    }
+
+    func capturePhoto() {
+        sessionQueue.async { [self] in
+            let settings = AVCapturePhotoSettings(format: [AVVideoCodecKey: AVVideoCodecType.jpeg])
+            photoOutput.capturePhoto(with: settings, delegate: self)
         }
     }
 
@@ -186,6 +255,9 @@ final class CameraController: NSObject, ObservableObject {
             if session.canAddOutput(output) {
                 session.addOutput(output)
             }
+            if session.canAddOutput(photoOutput) {
+                session.addOutput(photoOutput)
+            }
             session.commitConfiguration()
             session.startRunning()
 
@@ -198,6 +270,20 @@ final class CameraController: NSObject, ObservableObject {
             Task { @MainActor in
                 self.statusText = "Input failed: \(message)"
             }
+        }
+    }
+}
+
+extension CameraController: AVCapturePhotoCaptureDelegate {
+    nonisolated func photoOutput(_ output: AVCapturePhotoOutput,
+                                 didFinishProcessingPhoto photo: AVCapturePhoto,
+                                 error: Error?) {
+        guard error == nil,
+              let data = photo.fileDataRepresentation(),
+              let image = UIImage(data: data)
+        else { return }
+        Task { @MainActor in
+            self.capturedImage = image
         }
     }
 }
