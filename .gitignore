@@ -1,0 +1,9 @@
+.build/
+.swiftpm/
+*.app
+*.dSYM
+CAMouflage-Mock.zip
+.DS_Store
+xcuserdata/
+SampleApp/SampleApp.xcodeproj/
+SampleApp/build/

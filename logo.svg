@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" role="img" aria-label="CAMouflage logo">
+  <defs>
+    <clipPath id="badge"><rect x="0" y="0" width="512" height="512" rx="120" ry="120"/></clipPath>
+    <radialGradient id="lens" cx="42%" cy="40%" r="62%">
+      <stop offset="0%" stop-color="#28342c"/>
+      <stop offset="70%" stop-color="#1a231d"/>
+      <stop offset="100%" stop-color="#0e130f"/>
+    </radialGradient>
+  </defs>
+  <g clip-path="url(#badge)">
+    <rect width="512" height="512" fill="#2c3a30"/>
+    <polygon points="-40,120 300,-40 430,60 90,240" fill="#4a5c42"/>
+    <polygon points="180,540 540,300 560,430 240,560" fill="#4a5c42"/>
+    <polygon points="300,-20 560,140 560,300 360,150" fill="#7a8a56"/>
+    <polygon points="-40,300 150,220 240,420 -40,470" fill="#7a8a56"/>
+    <polygon points="120,300 300,210 360,330 190,430" fill="#2c3a30"/>
+    <!-- lens -->
+    <circle cx="256" cy="256" r="150" fill="url(#lens)" stroke="#c9c29a" stroke-width="3"/>
+    <!-- aperture blades -->
+    <g stroke="#c9c29a" stroke-width="4" stroke-linecap="round" fill="none">
+      <line x1="256" y1="210" x2="284" y2="112"/>
+      <line x1="296" y1="233" x2="382" y2="290"/>
+      <line x1="296" y1="279" x2="311" y2="380"/>
+      <line x1="256" y1="302" x2="228" y2="400"/>
+      <line x1="216" y1="279" x2="130" y2="222"/>
+      <line x1="216" y1="233" x2="201" y2="132"/>
+    </g>
+    <polygon points="256,210 296,233 296,279 256,302 216,279 216,233" fill="#0a0e0c"/>
+    <circle cx="192" cy="186" r="13" fill="#f0f2eb"/>
+  </g>
+</svg>

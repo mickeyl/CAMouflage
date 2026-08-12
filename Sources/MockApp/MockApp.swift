@@ -1,0 +1,37 @@
+import SwiftUI
+import AppKit
+
+@MainActor
+private final class MockAppRuntime {
+    let server: MockCameraServer
+    let statusBar: StatusBarController
+
+    init() {
+        server = MockCameraServer()
+        statusBar = StatusBarController(server: server)
+    }
+}
+
+@main
+struct MockApp: App {
+    fileprivate static var retainedRuntime: MockAppRuntime?
+
+    @StateObject private var server: MockCameraServer
+    @StateObject private var statusBar: StatusBarController
+
+    init() {
+        let runtime = Self.retainedRuntime ?? MockAppRuntime()
+        Self.retainedRuntime = runtime
+
+        _server = StateObject(wrappedValue: runtime.server)
+        _statusBar = StateObject(wrappedValue: runtime.statusBar)
+
+        NSApplication.shared.setActivationPolicy(.accessory)
+    }
+
+    var body: some Scene {
+        Settings {
+            EmptyView()
+        }
+    }
+}

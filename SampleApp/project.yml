@@ -1,0 +1,25 @@
+name: SampleApp
+options:
+  bundleIdPrefix: de.vanille
+packages:
+  CAMouflage:
+    path: ..
+targets:
+  SampleApp:
+    type: application
+    platform: iOS
+    deploymentTarget: "16.0"
+    sources: [Sources]
+    dependencies:
+      - package: CAMouflage
+    info:
+      path: Info.plist
+      properties:
+        UILaunchScreen: {}
+        NSCameraUsageDescription: "Shows the CAMouflage virtual camera."
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: de.vanille.camouflage-sample
+        TARGETED_DEVICE_FAMILY: "1"
+        CODE_SIGNING_ALLOWED: "NO"
