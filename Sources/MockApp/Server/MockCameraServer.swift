@@ -208,11 +208,14 @@ final class MockCameraServer: ObservableObject {
         guard fd >= 0 else { return }
 
         if clientFd >= 0 {
+            // Takeover: a freshly launched app (or another simulator) supersedes
+            // the previous connection instead of being rejected. Tell the old
+            // client to stand down — so its library stops auto-reconnecting and
+            // does not fight for the slot — then evict it and accept the new one.
             send(["type": "connectionRejected", "code": "clientBusy",
-                  "message": "another simulator app is already connected"], to: fd)
-            close(fd)
-            log("Rejected additional client")
-            return
+                  "message": "superseded by a newer simulator connection"], to: clientFd)
+            log("Superseding previous client")
+            disconnectClient()
         }
         clientFd = fd
         readBuffer.removeAll()

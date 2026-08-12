@@ -30,9 +30,17 @@
 
 Control messages (client → provider): `hello {clientVersion, bundleId, pid}`,
 `listDevices`, `startSession {sessionId, deviceId, maxFps}`, `stopSession
-{sessionId}`. Provider → client: `didListDevices {devices: [{id, name,
-position}]}`, `didStartSession {sessionId, ok}`, `didStopSession`,
-`connectionRejected {code: clientBusy}` for a second client.
+{sessionId}`, `capturePhoto {sessionId, requestId, format}`. Provider → client:
+`didListDevices {devices: [{id, name, position}]}`, `didStartSession {sessionId,
+ok}`, `didStopSession`, `didCapturePhoto {requestId, ok, width, height,
+dataBase64}`, `connectionRejected {code: clientBusy}`.
+
+**Single client, last-connection-wins.** The provider serves one simulator at a
+time, but a new connection *takes over* rather than being rejected: on connect it
+sends `connectionRejected {clientBusy}` to the **previous** client (whose library
+then stops auto-reconnecting) and evicts it, then accepts the newcomer. This is
+what makes relaunching the app, or switching between simulators, "just work" —
+the freshly launched one wins. To use an older simulator again, relaunch its app.
 
 Frame plane: client connects, sends one JSON hello line `{"sessionId": n}`,
 then reads binary frames. **The 32-byte little-endian header is a cross-target

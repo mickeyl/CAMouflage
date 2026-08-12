@@ -22,8 +22,9 @@ struct ContentView: View {
     @State private var overlaySize = CGSize.zero
     @State private var isDragging = false
     @State private var spin = false
+    @State private var flashOpacity = 0.0
 
-    private static let overlayBottomInset: CGFloat = 120
+    private static let overlayBottomInset: CGFloat = 44
 
     var body: some View {
         GeometryReader { proxy in
@@ -48,12 +49,6 @@ struct ContentView: View {
                     noSignalPlaceholder
                 }
 
-                VStack {
-                    Spacer()
-                    shutterButton
-                        .padding(.bottom, 40)
-                }
-
                 if let code = camera.detectedCode {
                     VStack {
                         scanBanner(code)
@@ -62,6 +57,11 @@ struct ContentView: View {
                     }
                     .transition(.move(edge: .top).combined(with: .opacity))
                 }
+
+                Color.white
+                    .ignoresSafeArea()
+                    .opacity(flashOpacity)
+                    .allowsHitTesting(false)
 
                 if let image = camera.capturedImage {
                     photoReview(image)
@@ -120,16 +120,28 @@ struct ContentView: View {
 
     private var shutterButton: some View {
         Button {
-            camera.capturePhoto()
+            triggerCapture()
         } label: {
             ZStack {
-                Circle().stroke(.white, lineWidth: 4).frame(width: 72, height: 72)
-                Circle().fill(.white).frame(width: 58, height: 58)
+                Circle().stroke(.primary, lineWidth: 3).frame(width: 50, height: 50)
+                Circle().fill(.primary).frame(width: 38, height: 38)
             }
-            .shadow(radius: 4)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(ShutterButtonStyle())
         .disabled(camera.capturedImage != nil)
+        .accessibilityLabel("Capture photo")
+    }
+
+    private func triggerCapture() {
+        camera.capturePhoto()
+        // Instant shutter flash for feedback, then fade out on the next tick so
+        // the peak actually renders (a single coalesced update would skip it).
+        flashOpacity = 0.85
+        DispatchQueue.main.async {
+            withAnimation(.easeOut(duration: 0.35)) {
+                flashOpacity = 0
+            }
+        }
     }
 
     private func photoReview(_ image: UIImage) -> some View {
@@ -164,21 +176,35 @@ struct ContentView: View {
     }
 
     private var statusOverlay: some View {
-        VStack(spacing: 6) {
+        VStack(spacing: 10) {
             Capsule()
                 .fill(.secondary)
                 .frame(width: 32, height: 4)
                 .opacity(0.6)
-            Text(camera.statusText)
-                .font(.callout.monospacedDigit())
-            Text(camera.frameText)
-                .font(.caption.monospacedDigit())
-                .foregroundStyle(.secondary)
+            HStack(spacing: 18) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(camera.statusText)
+                        .font(.callout.monospacedDigit())
+                    Text(camera.frameText)
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+                shutterButton
+            }
         }
-        .padding(12)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
+        .padding(14)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18))
         .shadow(radius: isDragging ? 12 : 0, y: isDragging ? 6 : 0)
         .contentShape(Rectangle())
+    }
+
+    private struct ShutterButtonStyle: ButtonStyle {
+        func makeBody(configuration: Configuration) -> some View {
+            configuration.label
+                .shadow(radius: 2)
+                .scaleEffect(configuration.isPressed ? 0.86 : 1)
+                .animation(.spring(response: 0.2, dampingFraction: 0.6), value: configuration.isPressed)
+        }
     }
 
     private func dragGesture(in container: CGSize) -> some Gesture {
