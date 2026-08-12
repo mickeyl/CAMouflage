@@ -21,6 +21,7 @@ struct ContentView: View {
     @GestureState private var dragTranslation = CGSize.zero
     @State private var overlaySize = CGSize.zero
     @State private var isDragging = false
+    @State private var spin = false
 
     private static let overlayBottomInset: CGFloat = 120
 
@@ -31,14 +32,20 @@ struct ContentView: View {
                     CameraPreview(session: camera.session)
                         .ignoresSafeArea()
 
-                    statusOverlay
-                        .onSizeChange { overlaySize = $0 }
-                        .offset(x: overlayOffset.width + dragTranslation.width,
-                                y: overlayOffset.height + dragTranslation.height)
-                        .scaleEffect(isDragging ? 1.04 : 1)
-                        .gesture(dragGesture(in: proxy.size))
-                        .animation(.interactiveSpring(response: 0.3, dampingFraction: 0.72), value: isDragging)
-                        .padding(.bottom, Self.overlayBottomInset)
+                    if camera.isReceivingFrames {
+                        statusOverlay
+                            .onSizeChange { overlaySize = $0 }
+                            .offset(x: overlayOffset.width + dragTranslation.width,
+                                    y: overlayOffset.height + dragTranslation.height)
+                            .scaleEffect(isDragging ? 1.04 : 1)
+                            .gesture(dragGesture(in: proxy.size))
+                            .animation(.interactiveSpring(response: 0.3, dampingFraction: 0.72), value: isDragging)
+                            .padding(.bottom, Self.overlayBottomInset)
+                    }
+                }
+
+                if !camera.isReceivingFrames {
+                    noSignalPlaceholder
                 }
 
                 VStack {
@@ -68,6 +75,32 @@ struct ContentView: View {
         .onAppear {
             camera.start()
         }
+    }
+
+    // Shown until the first frame arrives. The spinner animates continuously,
+    // which keeps the simulator compositing (a static screen there can otherwise
+    // get stuck on a stale/blank frame) and tells the user what to check.
+    private var noSignalPlaceholder: some View {
+        VStack(spacing: 18) {
+            Circle()
+                .trim(from: 0, to: 0.72)
+                .stroke(.white, style: StrokeStyle(lineWidth: 4, lineCap: .round))
+                .frame(width: 44, height: 44)
+                .rotationEffect(.degrees(spin ? 360 : 0))
+                .onAppear {
+                    withAnimation(.linear(duration: 1).repeatForever(autoreverses: false)) {
+                        spin = true
+                    }
+                }
+            Text(camera.statusText)
+                .font(.headline)
+                .foregroundStyle(.white)
+            Text("Make sure the CAMouflage mock app is running (Mock or Passthrough).")
+                .font(.callout)
+                .foregroundStyle(.white.opacity(0.7))
+                .multilineTextAlignment(.center)
+        }
+        .padding(40)
     }
 
     private func scanBanner(_ code: String) -> some View {
@@ -220,6 +253,9 @@ struct CameraPreview: UIViewRepresentable {
 
     func makeUIView(context: Context) -> PreviewView {
         let view = PreviewView()
+        // A black backdrop so the "no signal" state reads as a camera without a
+        // feed (status overlay legible on top) instead of a blank white/black void.
+        view.backgroundColor = .black
         view.previewLayer.session = session
         view.previewLayer.videoGravity = .resizeAspectFill
         return view
@@ -238,6 +274,7 @@ final class CameraController: NSObject, ObservableObject {
     @Published var frameText = "no frames yet"
     @Published var capturedImage: UIImage?
     @Published var detectedCode: String?
+    @Published var isReceivingFrames = false
 
     private let sessionQueue = DispatchQueue(label: "sample.session")
     private let videoQueue = DispatchQueue(label: "sample.video")
@@ -345,6 +382,7 @@ extension CameraController: AVCaptureVideoDataOutputSampleBufferDelegate {
         Task { @MainActor in
             self.frameCount += 1
             self.lastSize = size
+            self.isReceivingFrames = true
             self.frameText = "\(self.frameCount) frames · \(Int(size.width))×\(Int(size.height))"
         }
     }

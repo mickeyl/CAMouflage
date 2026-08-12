@@ -155,6 +155,21 @@ Neither is warranted until pooling is in place and numbers say otherwise.
   `metadataOutput(_:didOutput:from:)` — an API-notes rename. Use the ObjC name in
   `respondsToSelector:`/dispatch.
 
+## Gotchas when running the SampleApp
+
+- **Regenerate after source changes.** `SampleApp.xcodeproj` is generated and
+  gitignored; run `xcodegen generate` (and a clean build) after pulling changes
+  that touch the SampleApp or the library, or a stale incremental build can run
+  old/broken code.
+- **Blank screen at launch = no provider running (usually).** The SampleApp
+  shows a black "No camera — is the CAMouflage mock app running?" placeholder
+  until the first frame arrives. Start the mock app (Mock or Passthrough) and
+  frames appear. On some iOS Simulator runtimes (seen on the iOS 26/27 betas) a
+  freshly launched app with no frames yet can get stuck showing the blank launch
+  image until something forces a window re-layout (a rotation, a tap, or the
+  first frame). It is a simulator compositing quirk, not an app bug — the moment
+  frames flow (provider running) or the user interacts, the UI appears.
+
 ## Validation
 
 ```bash
