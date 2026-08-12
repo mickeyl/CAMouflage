@@ -23,8 +23,9 @@ the [architecture note](#architecture-note) under How It Works.
 > live feed from a real Mac camera (built-in, external UVC, or Continuity Camera)
 > as the simulator's front and back cameras, rendered through stock
 > `AVCaptureVideoPreviewLayer` and delivered to `AVCaptureVideoDataOutput`
-> delegates. Photo capture and QR/barcode metadata are next; see
-> [PLAN.md](PLAN.md) for the full roadmap.
+> delegates, with working **photo capture** (`AVCapturePhotoOutput`) and
+> **QR/barcode scanning** (`AVCaptureMetadataOutput`, in-process via Vision).
+> See [PLAN.md](PLAN.md) for the full roadmap.
 
 <p align="center">
   <img src="screenshot-passthrough.png" alt="A live Mac webcam rendered as the iOS Simulator's back camera, with the CAMouflage panel showing the selectable source camera" width="760">
@@ -135,8 +136,10 @@ log` tails its output; `make status` / `make mock-stop` manage the process.
 
 ## Limitations (proof of concept)
 
-- Video preview + sample buffer delivery only — no photo capture, no metadata
-  (QR/barcode) output, no movie recording yet.
+- Preview, sample buffers, photo capture, and QR/barcode scanning work; movie
+  recording (`AVCaptureMovieFileOutput`) does not yet.
+- A captured photo is the current preview/camera frame re-encoded, not a separate
+  full-resolution still.
 - Passthrough forwards the camera's native format re-encoded as JPEG; it does
   not yet honor a requested resolution/fps, mirror front cameras, or map
   built-in/Continuity devices to specific front/back positions.

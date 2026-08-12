@@ -47,6 +47,15 @@ struct ContentView: View {
                         .padding(.bottom, 40)
                 }
 
+                if let code = camera.detectedCode {
+                    VStack {
+                        scanBanner(code)
+                            .padding(.top, 8)
+                        Spacer()
+                    }
+                    .transition(.move(edge: .top).combined(with: .opacity))
+                }
+
                 if let image = camera.capturedImage {
                     photoReview(image)
                         .transition(.opacity)
@@ -54,10 +63,26 @@ struct ContentView: View {
             }
             .frame(width: proxy.size.width, height: proxy.size.height)
             .animation(.easeInOut(duration: 0.2), value: camera.capturedImage)
+            .animation(.spring(response: 0.35, dampingFraction: 0.85), value: camera.detectedCode)
         }
         .onAppear {
             camera.start()
         }
+    }
+
+    private func scanBanner(_ code: String) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "qrcode.viewfinder")
+            Text(code)
+                .lineLimit(1)
+                .truncationMode(.middle)
+        }
+        .font(.callout.weight(.medium))
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .background(.green.opacity(0.9), in: Capsule())
+        .foregroundStyle(.white)
+        .shadow(radius: 4)
     }
 
     private var shutterButton: some View {
@@ -207,10 +232,12 @@ struct CameraPreview: UIViewRepresentable {
 final class CameraController: NSObject, ObservableObject {
     let session = AVCaptureSession()
     private let photoOutput = AVCapturePhotoOutput()
+    private let metadataOutput = AVCaptureMetadataOutput()
 
     @Published var statusText = "Starting…"
     @Published var frameText = "no frames yet"
     @Published var capturedImage: UIImage?
+    @Published var detectedCode: String?
 
     private let sessionQueue = DispatchQueue(label: "sample.session")
     private let videoQueue = DispatchQueue(label: "sample.video")
@@ -258,6 +285,11 @@ final class CameraController: NSObject, ObservableObject {
             if session.canAddOutput(photoOutput) {
                 session.addOutput(photoOutput)
             }
+            if session.canAddOutput(metadataOutput) {
+                session.addOutput(metadataOutput)
+                metadataOutput.setMetadataObjectsDelegate(self, queue: videoQueue)
+                metadataOutput.metadataObjectTypes = [.qr, .aztec, .pdf417, .dataMatrix, .ean13, .code128]
+            }
             session.commitConfiguration()
             session.startRunning()
 
@@ -270,6 +302,20 @@ final class CameraController: NSObject, ObservableObject {
             Task { @MainActor in
                 self.statusText = "Input failed: \(message)"
             }
+        }
+    }
+}
+
+extension CameraController: AVCaptureMetadataOutputObjectsDelegate {
+    nonisolated func metadataOutput(_ output: AVCaptureMetadataOutput,
+                                    didOutput metadataObjects: [AVMetadataObject],
+                                    from connection: AVCaptureConnection) {
+        guard let code = metadataObjects
+            .compactMap({ ($0 as? AVMetadataMachineReadableCodeObject)?.stringValue })
+            .first
+        else { return }
+        Task { @MainActor in
+            self.detectedCode = code
         }
     }
 }

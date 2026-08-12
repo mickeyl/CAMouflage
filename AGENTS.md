@@ -131,6 +131,30 @@ entirely via the already-designed v2 zero-copy frame plane (IOSurface /
 `SCM_RIGHTS` fd-passing — the pixel-format tag in the frame header is the seam).
 Neither is warranted until pooling is in place and numbers say otherwise.
 
+## Photo & metadata (library-side)
+
+- **Photo capture** swizzles `-[AVCapturePhotoOutput capturePhotoWithSettings:
+  delegate:]` into a control-plane round-trip (`capturePhoto` →
+  `didCapturePhoto`, JPEG base64 in JSON on the control socket — the frame socket
+  stays stateless). `CMFPhoto` and `CMFResolvedPhotoSettings` (in `CMFProxies`)
+  are accessor-override-only shims alloc'd at the NSObject level and immortalized
+  like the other proxies. The delegate choreography (willBegin → willCapture →
+  didFinishProcessing → didFinishCapture) is replayed on a private serial queue.
+- **Metadata / barcodes** are fully in-process (`CMFMetadata.m`): the frame
+  router calls `CMFMetadataProcessFrame` for each `AVCaptureMetadataOutput`,
+  which runs `VNDetectBarcodesRequest` off-thread (throttled ~10 Hz) and emits
+  `AVMetadataMachineReadableCodeObject` shims. No provider round-trip.
+- **Two simulator-Vision gotchas, both handled in `cmf_detect_codes`:** the
+  default barcode detector fails on the simulator with *"Could not create
+  inference context"*, so we pin `VNDetectBarcodesRequestRevision1` (classical,
+  no ML) when supported; and Vision's `CVPixelBuffer` path also trips there, so
+  we hand it a `CGImage` decoded through a **software** `CIContext`. Both are
+  needed — dropping either regresses to zero detections on the simulator.
+- **The metadata delegate selector is `captureOutput:didOutputMetadataObjects:
+  fromConnection:`** (ObjC), even though Swift presents it as
+  `metadataOutput(_:didOutput:from:)` — an API-notes rename. Use the ObjC name in
+  `respondsToSelector:`/dispatch.
+
 ## Validation
 
 ```bash

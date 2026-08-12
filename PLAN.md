@@ -434,8 +434,8 @@ against a Logitech UVC webcam at 1920×1080). Validation evidence:
 | 4 — Preview layer | ✅ done (PoC level) | Gravity + layout work; point/rect conversion not implemented |
 | 5 — Passthrough | ✅ done (in mock app) | Real camera enumeration (built-in/external/Continuity/Desk View), selectable source, live device switching, TCC prompt, camera runs only while a client streams. Integrated into the mock app rather than a separate helper (see Phase 5 note). Missing: fps/resolution negotiation, activity snapshot file, JPEG-encoder measurement |
 | 6 — Mock app | 🟡 PoC subset | Test pattern / image / movie fixtures, passthrough source picker, live switching, persistence. Missing: per-device fixtures, stock configurations, capture-from-camera, launch-at-startup |
-| 7 — Photo output | ⬜ not started | `CMFPhoto` shim design in §2 |
-| 8 — Metadata via Vision | ⬜ not started | |
+| 7 — Photo output | ✅ done | `capturePhoto` round-trip; `CMFPhoto`/`CMFResolvedPhotoSettings` shims; full delegate choreography. Photo is the current fixture/camera frame re-encoded (no separate full-res still yet) |
+| 8 — Metadata via Vision | ✅ done | In-process `VNDetectBarcodesRequest` on delivered frames, throttled ~10 Hz; `AVMetadataMachineReadableCodeObject` shims with stringValue/type/bounds/corners; `rectOfInterest` honored. Simulator needs the classical detector (see notes) |
 | 9 — Client-supplied fixtures | ⬜ not started | `CAMouflageIsProviderConnected()` already public |
 | 10 — Polish & release | 🟡 partial | README, AGENTS.md, screenshot exist |
 
@@ -458,9 +458,11 @@ Known PoC limitations beyond the table:
 
 ### Suggested next steps, in order of leverage
 
-1. **Photo output** (phase 7) — the most-requested capture flow after preview.
-2. **Metadata via Vision** (phase 8) — unlocks QR-scan testing, the killer demo.
-3. **Client-supplied fixtures** (phase 9) — small, and makes UI tests possible.
-4. **Passthrough polish** (phase 5 tail) — position mapping (built-in → front,
+1. **Client-supplied fixtures** (phase 9) — small, and makes UI tests possible.
+2. **Passthrough polish** (phase 5 tail) — position mapping (built-in → front,
    Continuity/external → back), mirroring for front devices, resolution/fps
    negotiation, and reflecting the real device name in the advertised list.
+3. **Photo/metadata polish** — a real full-resolution still for photo capture
+   (rather than the current preview frame), a QR/barcode *generator* fixture in
+   the mock app (so scanning needs no external image), and mapping metadata
+   corners through the preview transform for pixel-accurate overlays.

@@ -6,6 +6,7 @@
 #import "CMFConnection.h"
 #import "CMFFrameStream.h"
 #import "CMFProxies.h"
+#import "CMFMetadata.h"
 
 #if TARGET_OS_SIMULATOR
 
@@ -114,6 +115,16 @@ static void cmf_route_frame(uint32_t sessionId, CMSampleBufferRef sampleBuffer) 
             [delegate captureOutput:output didOutputSampleBuffer:sampleBuffer fromConnection:connection];
             CFRelease(sampleBuffer);
         });
+    }
+
+    CVImageBufferRef imageBuffer = CMSampleBufferGetImageBuffer(sampleBuffer);
+    if (imageBuffer) {
+        CMTime pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer);
+        for (AVCaptureOutput *output in outputs) {
+            if ([output isKindOfClass:[AVCaptureMetadataOutput class]]) {
+                CMFMetadataProcessFrame((AVCaptureMetadataOutput *)output, imageBuffer, pts);
+            }
+        }
     }
 }
 
@@ -753,6 +764,8 @@ BOOL CAMouflageIsProviderConnected(void) {
     Class photoOutput = [AVCapturePhotoOutput class];
     cmf_swizzle(photoOutput, @selector(capturePhotoWithSettings:delegate:), (IMP)cmf_capture_photo, (IMP *)&orig_capture_photo);
     cmf_swizzle(photoOutput, @selector(availablePhotoCodecTypes), (IMP)cmf_available_codecs, (IMP *)&orig_available_codecs);
+
+    CMFMetadataInstallSwizzles();
 
     Class previewLayer = [AVCaptureVideoPreviewLayer class];
     cmf_swizzle(previewLayer, @selector(initWithSession:), (IMP)cmf_layer_init_with_session, (IMP *)&orig_layer_init_with_session);
