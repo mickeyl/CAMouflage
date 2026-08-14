@@ -1,3 +1,10 @@
+2026-08-14  CAMouflage 0.4.0
+
+	* Fix: the status item's click monitor swallowed Command-held
+	  mouse-downs on the menu bar icon, blocking the system's
+	  built-in Command-drag repositioning. Command-held clicks now
+	  pass through to the button untouched.
+
 2026-08-12  CAMouflage 0.1.0 (proof of concept)
 
 	* Simulator-side library: +load swizzling of AVCaptureDevice

@@ -18,7 +18,7 @@ philosophy, same integration story: add a local Swift package, build, run. No
 test. The one intentional divergence is where the passthrough logic lives — see
 the [architecture note](#architecture-note) under How It Works.
 
-> **Status: 0.3.0 Preview.** Mock **and passthrough** modes work — a menu bar
+> **Status: 0.4.0 Preview.** Mock **and passthrough** modes work — a menu bar
 > app serves either a fixture (test pattern, static image, or looping movie) or a
 > live feed from a real Mac camera (built-in, external UVC, or Continuity Camera)
 > as the simulator's front and back cameras, rendered through stock

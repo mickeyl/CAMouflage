@@ -107,6 +107,7 @@ final class StatusBarController: NSObject, ObservableObject, NSWindowDelegate {
         button.toolTip = "CAMouflage"
         statusButtonClickMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self, weak button] event in
             guard let self, let button, event.window === button.window else { return event }
+            guard !event.modifierFlags.contains(.command) else { return event }
             let location = button.convert(event.locationInWindow, from: nil)
             guard button.bounds.contains(location) else { return event }
             self.toggleControlWindow()
