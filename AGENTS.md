@@ -10,6 +10,13 @@
   (`CMFFrameStream`). The control socket opens lazily on first capture-API use.
 - `Sources/MockApp` builds `CAMouflage-Mock.app`, the host-side menu bar
   provider (own `Package.swift`, built via `swift build` through the Makefile).
+  It has two targets: **`CAMouflageProviderKit`** (library product
+  `ProviderKit/` — camera server, frame plane, fixtures, catalog, panel view;
+  this is what the Simsalabim suite app will embed) and the thin
+  **`CAMouflage-Mock`** executable (`App/` — app lifecycle plus the shell
+  wiring in `StatusBarController`). The ProviderKit's public surface:
+  `MockCameraServer` (facade with `transport` and the frame-traffic pulse),
+  `CameraCatalog`, and `MenuContent`; everything else is internal.
   The control-plane transport is SimBridgeKit's `ProtocolServer`
   (`MockCameraServer.transport`, URL dependency on
   github.com/mickeyl/SimBridgeKit) — socket lifecycle, NDJSON framing, the
@@ -106,9 +113,10 @@ ptsMicros). The pixel-format tag is the seam for a future zero-copy upgrade.
 - The mock app persists `ProviderMode`, `ServerEnabled`, `Fixture` (JSON data),
   and `PassthroughDeviceID` (the selected Mac camera's `uniqueID`) in
   `de.vanille.camouflage-mock` defaults — headless testing can seed these with
-  `defaults write` before launch. `ProviderMode` is now the single source of
-  truth for whether the provider runs: `StatusBarController.applyMode()` starts
-  the sockets for both `mock` and `passthrough` and stops them for `off`.
+  `defaults write` before launch. `ProviderMode` is the single source of
+  truth for whether the provider runs: the mode transition (SimBridgeShell's
+  `ModeTransitionController`, wired in `StatusBarController`) starts the
+  sockets for both `mock` and `passthrough` and stops them for `off`.
 - **Passthrough invariants.** One `CameraCaptureSource` is shared across both
   virtual cameras (Continuity Camera refuses concurrent sessions on the same
   device). The real camera only runs while at least one simulator stream is live
