@@ -1,4 +1,5 @@
 import AppKit
+import CAMouflageProviderKit
 import Combine
 import SwiftUI
 import SimBridgeServer

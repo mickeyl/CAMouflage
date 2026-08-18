@@ -12,10 +12,10 @@ struct CameraDevice: Identifiable, Equatable {
 /// the user picked for passthrough. UI-facing state is published on the main
 /// thread; the persisted selection survives relaunches.
 @MainActor
-final class CameraCatalog: ObservableObject {
+public final class CameraCatalog: ObservableObject {
     @Published private(set) var devices: [CameraDevice] = []
     @Published private(set) var authorization: AVAuthorizationStatus
-    @Published var selectedDeviceID: String? {
+    @Published public var selectedDeviceID: String? {
         didSet {
             guard selectedDeviceID != oldValue else { return }
             UserDefaults.standard.set(selectedDeviceID, forKey: Self.selectionKey)
@@ -28,7 +28,7 @@ final class CameraCatalog: ObservableObject {
 
     private var observers: [NSObjectProtocol] = []
 
-    init() {
+    public init() {
         authorization = AVCaptureDevice.authorizationStatus(for: .video)
         selectedDeviceID = UserDefaults.standard.string(forKey: Self.selectionKey)
         refresh()
@@ -47,7 +47,7 @@ final class CameraCatalog: ObservableObject {
 
     /// Requests camera access on first passthrough use, then refreshes the list.
     /// TCC-gated device names only resolve once access is granted.
-    func activate() {
+    public func activate() {
         guard authorization == .notDetermined else {
             refresh()
             return

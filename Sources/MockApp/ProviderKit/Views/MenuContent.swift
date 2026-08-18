@@ -3,7 +3,7 @@ import UniformTypeIdentifiers
 import SimBridgeServer
 import SimBridgeShell
 
-struct MenuContent: View {
+public struct MenuContent: View {
     @ObservedObject var server: MockCameraServer
     @ObservedObject var transport: ProtocolServer
     @ObservedObject var catalog: CameraCatalog
@@ -14,7 +14,21 @@ struct MenuContent: View {
     @State private var launchAtLogin = MenuContent.launchAgent.isEnabled
     private static let launchAgent = LaunchAtLogin(label: "de.vanille.camouflage-mock")
 
-    var body: some View {
+    public init(
+        server: MockCameraServer,
+        transport: ProtocolServer,
+        catalog: CameraCatalog,
+        controller: ModeTransitionController<ProviderMode>,
+        onDismiss: @escaping () -> Void
+    ) {
+        self.server = server
+        self.transport = transport
+        self.catalog = catalog
+        self.controller = controller
+        self.onDismiss = onDismiss
+    }
+
+    public var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             header
             modePicker

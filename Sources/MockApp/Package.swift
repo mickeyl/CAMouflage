@@ -4,35 +4,33 @@ import PackageDescription
 let package = Package(
     name: "CAMouflage-Mock",
     platforms: [.macOS("15.0")],
+    products: [
+        // The host-side provider as a library, so the Simsalabim suite app can
+        // embed it alongside other providers. The standalone menu bar app is a
+        // thin wrapper around the same target.
+        .library(name: "CAMouflageProviderKit", targets: ["CAMouflageProviderKit"]),
+        .executable(name: "CAMouflage-Mock", targets: ["CAMouflage-Mock"]),
+    ],
     dependencies: [
         .package(url: "https://github.com/mickeyl/SimBridgeKit.git", from: "0.1.1"),
     ],
     targets: [
-        .executableTarget(
-            name: "CAMouflage-Mock",
+        .target(
+            name: "CAMouflageProviderKit",
             dependencies: [
                 .product(name: "SimBridgeServer", package: "SimBridgeKit"),
                 .product(name: "SimBridgeShell", package: "SimBridgeKit"),
             ],
-            path: ".",
-            exclude: [
-                "Resources/CAMouflage.icns",
-                "Resources/Info.plist",
-                "Resources/entitlements.plist",
+            path: "ProviderKit"
+        ),
+        .executableTarget(
+            name: "CAMouflage-Mock",
+            dependencies: [
+                "CAMouflageProviderKit",
+                .product(name: "SimBridgeServer", package: "SimBridgeKit"),
+                .product(name: "SimBridgeShell", package: "SimBridgeKit"),
             ],
-            sources: [
-                "MockApp.swift",
-                "StatusBarController.swift",
-                "Models/AppVersion.swift",
-                "Models/ClientMockConfiguration.swift",
-                "Models/FixtureSource.swift",
-                "Server/MockCameraServer.swift",
-                "Server/FrameServer.swift",
-                "Server/FrameProducer.swift",
-                "Server/CameraCaptureSource.swift",
-                "Server/CameraCatalog.swift",
-                "Views/MenuContent.swift",
-            ]
+            path: "App"
         )
     ]
 )

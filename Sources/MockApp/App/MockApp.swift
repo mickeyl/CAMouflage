@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import CAMouflageProviderKit
 
 @MainActor
 private final class MockAppRuntime {

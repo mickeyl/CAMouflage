@@ -11,14 +11,14 @@ private let kControlSocketPath = "/tmp/camouflage.sock"
 /// `ProtocolServer`; the binary frame plane stays in `FrameServer`, untouched.
 /// Every handler here runs on the transport's I/O queue, which also guards all
 /// mutable state; UI-facing state is published on the main thread.
-final class MockCameraServer: ObservableObject {
+public final class MockCameraServer: ObservableObject {
     /// Socket lifecycle, connection status, and client identity are published
     /// by the transport; observe it directly.
-    let transport: ProtocolServer
+    public let transport: ProtocolServer
 
     /// Frame-plane traffic pulse. Deliberately not the transport's control
     /// message pulse: "streaming" means frames are flowing, not JSON.
-    @Published var trafficActive: Bool = false
+    @Published public private(set) var trafficActive: Bool = false
     /// A live thumbnail of the most recently served frame — what the simulator
     /// app currently sees. Nil while no client is streaming.
     @Published var previewImage: NSImage?
@@ -60,7 +60,7 @@ final class MockCameraServer: ObservableObject {
         ["id": "cmf-front", "name": "CAMouflage Front Camera", "position": "front"],
     ]
 
-    init() {
+    public init() {
         transport = ProtocolServer(
             socketPath: kControlSocketPath,
             name: "CAMouflage-Mock",
@@ -86,12 +86,12 @@ final class MockCameraServer: ObservableObject {
         }
     }
 
-    var isRunning: Bool { transport.isRunning }
+    public var isRunning: Bool { transport.isRunning }
 
     // MARK: - Source mode
 
     /// Serve the currently selected fixture. Idempotently brings the sockets up.
-    func useMock(completion: (() -> Void)? = nil) {
+    public func useMock(completion: (() -> Void)? = nil) {
         sourceMode = .mock
         start(completion: completion)
         frameServer.useFixture(fixture)
@@ -99,7 +99,7 @@ final class MockCameraServer: ObservableObject {
 
     /// Forward a real Mac camera. `deviceID` may be nil until the user picks one
     /// (or grants camera access); frames start flowing once a device is set.
-    func usePassthrough(deviceID: String?, completion: (() -> Void)? = nil) {
+    public func usePassthrough(deviceID: String?, completion: (() -> Void)? = nil) {
         sourceMode = .passthrough
         passthroughDeviceID = deviceID
         start(completion: completion)
@@ -107,7 +107,7 @@ final class MockCameraServer: ObservableObject {
     }
 
     /// Live-switch the forwarded camera while passthrough is already active.
-    func selectPassthroughDevice(_ deviceID: String?) {
+    public func selectPassthroughDevice(_ deviceID: String?) {
         passthroughDeviceID = deviceID
         guard sourceMode == .passthrough, isRunning else { return }
         frameServer.usePassthrough(deviceID: deviceID)
@@ -119,7 +119,7 @@ final class MockCameraServer: ObservableObject {
         transport.start(completion: completion)
     }
 
-    func stop(completion: (() -> Void)? = nil) {
+    public func stop(completion: (() -> Void)? = nil) {
         UserDefaults.standard.set(false, forKey: Self.serverEnabledKey)
         frameServer.stop()
         transport.stop(completion: completion)
