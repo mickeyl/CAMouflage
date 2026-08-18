@@ -124,7 +124,7 @@ final class StatusBarController: NSObject, ObservableObject, NSWindowDelegate {
     private func observeIconState() {
         // @Published emits in willSet; hop through the main queue so
         // updateIcon() runs after didSet.
-        server.$status.receive(on: DispatchQueue.main)
+        server.transport.$status.receive(on: DispatchQueue.main)
             .sink { [weak self] _ in self?.updateIcon() }.store(in: &cancellables)
         server.$trafficActive.receive(on: DispatchQueue.main)
             .sink { [weak self] _ in self?.updateIcon() }.store(in: &cancellables)
@@ -147,12 +147,11 @@ final class StatusBarController: NSObject, ObservableObject, NSWindowDelegate {
     private func updateIcon() {
         guard let button = statusItem.button else { return }
         let name: String =
-            if server.status == .stopped {
-                "video.slash"
-            } else if server.trafficActive {
-                "video.fill"
-            } else {
-                "video"
+            switch server.transport.status {
+                case .stopped, .blocked:
+                    "video.slash"
+                case .listening, .clientConnected:
+                    server.trafficActive ? "video.fill" : "video"
             }
         let configuration = NSImage.SymbolConfiguration(pointSize: 15, weight: .regular)
         let image = NSImage(systemSymbolName: name, accessibilityDescription: "CAMouflage")?
@@ -182,6 +181,7 @@ final class StatusBarController: NSObject, ObservableObject, NSWindowDelegate {
     private func makeControlWindow() -> NSPanel {
         let root = MenuContent(
             server: server,
+            transport: server.transport,
             catalog: catalog,
             controller: self,
             onDismiss: { [weak self] in self?.hideControlWindow() }

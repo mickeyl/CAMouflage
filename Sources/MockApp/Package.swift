@@ -4,11 +4,15 @@ import PackageDescription
 let package = Package(
     name: "CAMouflage-Mock",
     platforms: [.macOS("15.0")],
-    dependencies: [],
+    dependencies: [
+        .package(url: "https://github.com/mickeyl/SimBridgeKit.git", from: "0.1.1"),
+    ],
     targets: [
         .executableTarget(
             name: "CAMouflage-Mock",
-            dependencies: [],
+            dependencies: [
+                .product(name: "SimBridgeServer", package: "SimBridgeKit"),
+            ],
             path: ".",
             exclude: [
                 "Resources/CAMouflage.icns",

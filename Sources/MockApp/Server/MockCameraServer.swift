@@ -1,39 +1,27 @@
 import Foundation
 import AppKit
+import SimBridgeServer
 
 private let kControlSocketPath = "/tmp/camouflage.sock"
 
-private func suppressSIGPIPE(on fd: Int32) {
-    var enabled: Int32 = 1
-    setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &enabled, socklen_t(MemoryLayout.size(ofValue: enabled)))
-}
-
-struct SocketClientInfo: Equatable {
-    let pid: Int
-    let bundleId: String
-
-    var displayText: String {
-        "\(bundleId) (PID \(pid))"
-    }
-}
-
-/// Control-plane socket server implementing the CAMouflage provider protocol
-/// with mock devices. All socket I/O runs on `ioQueue`; UI-facing state is
-/// published on the main thread.
+/// The domain layer behind the CAMouflage control socket, serving mock camera
+/// devices in both source modes. The control-plane transport — socket
+/// lifecycle, NDJSON framing, hello handshake, last-connection-wins takeover,
+/// client-socket hardening, and the socket-ownership guard — is SimBridgeKit's
+/// `ProtocolServer`; the binary frame plane stays in `FrameServer`, untouched.
+/// Every handler here runs on the transport's I/O queue, which also guards all
+/// mutable state; UI-facing state is published on the main thread.
 final class MockCameraServer: ObservableObject {
-    enum Status: Equatable {
-        case stopped
-        case listening
-        case clientConnected
-    }
+    /// Socket lifecycle, connection status, and client identity are published
+    /// by the transport; observe it directly.
+    let transport: ProtocolServer
 
-    @Published var status: Status = .stopped
-    @Published var lastActivity: String = ""
+    /// Frame-plane traffic pulse. Deliberately not the transport's control
+    /// message pulse: "streaming" means frames are flowing, not JSON.
     @Published var trafficActive: Bool = false
     /// A live thumbnail of the most recently served frame — what the simulator
     /// app currently sees. Nil while no client is streaming.
     @Published var previewImage: NSImage?
-    @Published private(set) var connectedClient: SocketClientInfo?
     @Published private(set) var activeSessionCount: Int = 0
     @Published private(set) var clientConfiguration: ClientMockConfiguration?
     @Published var fixture: FixtureSource = .restore() {
@@ -55,19 +43,15 @@ final class MockCameraServer: ObservableObject {
     private var sourceMode: SourceMode = .mock
     private var passthroughDeviceID: String?
 
-    private let ioQueue = DispatchQueue(label: "camouflage.mock.io")
     private let frameServer = FrameServer()
     private var trafficResetWorkItem: DispatchWorkItem?
 
-    // Guarded by ioQueue
-    private var serverFd: Int32 = -1
-    private var clientFd: Int32 = -1
-    private var clientInfo: SocketClientInfo?
-    private var acceptSource: DispatchSourceRead?
-    private var readSource: DispatchSourceRead?
-    private var readBuffer = Data()
+    // Guarded by the transport's I/O queue
     private var sessions = Set<UInt32>()
     private var clientSuppliedConfiguration: ClientMockConfiguration?
+    /// Bumped on every connect and teardown so async authorization completions
+    /// can detect that "their" client is gone (the fd is not exposed anymore).
+    private var connectionEpoch: UInt64 = 0
 
     private static let serverEnabledKey = "ServerEnabled"
 
@@ -77,6 +61,20 @@ final class MockCameraServer: ObservableObject {
     ]
 
     init() {
+        transport = ProtocolServer(
+            socketPath: kControlSocketPath,
+            name: "CAMouflage-Mock",
+            appVersion: AppVersion.current
+        )
+        transport.onMessage = { [weak self] message in
+            self?.handle(message)
+        }
+        transport.onClientConnected = { [weak self] _ in
+            self?.handleClientConnected()
+        }
+        transport.onClientTeardown = { [weak self] _ in
+            self?.handleClientTeardown()
+        }
         frameServer.onTraffic = { [weak self] in
             self?.flashTraffic()
         }
@@ -88,7 +86,7 @@ final class MockCameraServer: ObservableObject {
         }
     }
 
-    var isRunning: Bool { status != .stopped }
+    var isRunning: Bool { transport.isRunning }
 
     // MARK: - Source mode
 
@@ -118,141 +116,26 @@ final class MockCameraServer: ObservableObject {
     func start(completion: (() -> Void)? = nil) {
         UserDefaults.standard.set(true, forKey: Self.serverEnabledKey)
         frameServer.start()
-        ioQueue.async { [self] in
-            defer {
-                if let completion {
-                    DispatchQueue.main.async(execute: completion)
-                }
-            }
-            guard serverFd < 0 else { return }
-
-            let fd = socket(AF_UNIX, SOCK_STREAM, 0)
-            guard fd >= 0 else {
-                NSLog("CAMouflage-Mock: socket() failed")
-                return
-            }
-            suppressSIGPIPE(on: fd)
-            unlink(kControlSocketPath)
-
-            var addr = sockaddr_un()
-            addr.sun_family = sa_family_t(AF_UNIX)
-            let pathBytes = kControlSocketPath.utf8CString
-            withUnsafeMutablePointer(to: &addr.sun_path) { ptr in
-                let raw = UnsafeMutableRawPointer(ptr)
-                pathBytes.withUnsafeBufferPointer { buf in
-                    raw.copyMemory(from: buf.baseAddress!, byteCount: min(buf.count, 104))
-                }
-            }
-            let bindResult = withUnsafePointer(to: &addr) { ptr in
-                ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sa in
-                    bind(fd, sa, socklen_t(MemoryLayout<sockaddr_un>.size))
-                }
-            }
-            guard bindResult == 0 else {
-                NSLog("CAMouflage-Mock: bind() failed: %d", errno)
-                close(fd)
-                return
-            }
-            guard listen(fd, 2) == 0 else {
-                NSLog("CAMouflage-Mock: listen() failed")
-                close(fd)
-                return
-            }
-
-            serverFd = fd
-            publishStatus(.listening)
-            log("Listening")
-
-            let source = DispatchSource.makeReadSource(fileDescriptor: fd, queue: ioQueue)
-            source.setEventHandler { [weak self] in
-                self?.acceptClient()
-            }
-            source.setCancelHandler {
-                close(fd)
-            }
-            source.resume()
-            acceptSource = source
-        }
+        transport.start(completion: completion)
     }
 
     func stop(completion: (() -> Void)? = nil) {
         UserDefaults.standard.set(false, forKey: Self.serverEnabledKey)
         frameServer.stop()
-        ioQueue.async { [self] in
-            let hadServer = serverFd >= 0
-
-            readSource?.cancel()
-            readSource = nil
-            if clientFd >= 0 {
-                close(clientFd)
-                clientFd = -1
-            }
-            clientInfo = nil
-            publishConnectedClient(nil)
-
-            acceptSource?.cancel()
-            acceptSource = nil
-            serverFd = -1
-            if hadServer {
-                unlink(kControlSocketPath)
-            }
-
-            sessions.removeAll()
-            publishSessionCount(0)
-            clientSuppliedConfiguration = nil
-            publishClientConfiguration(nil)
-            readBuffer.removeAll()
-            publishStatus(.stopped)
-            log("Stopped")
-
-            if let completion {
-                DispatchQueue.main.async(execute: completion)
-            }
-        }
+        transport.stop(completion: completion)
     }
 
-    // MARK: - Connection (ioQueue)
+    // MARK: - Connection lifecycle (transport I/O queue)
 
-    private func acceptClient() {
-        let fd = accept(serverFd, nil, nil)
-        guard fd >= 0 else { return }
-        suppressSIGPIPE(on: fd)
-
-        if clientFd >= 0 {
-            // Takeover: a freshly launched app (or another simulator) supersedes
-            // the previous connection instead of being rejected. Tell the old
-            // client to stand down — so its library stops auto-reconnecting and
-            // does not fight for the slot — then evict it and accept the new one.
-            send(["type": "connectionRejected", "code": "clientBusy",
-                  "message": "superseded by a newer simulator connection"], to: clientFd)
-            log("Superseding previous client")
-            disconnectClient()
-        }
-        clientFd = fd
-        clearClientSuppliedConfiguration(logChange: false)
-        readBuffer.removeAll()
+    private func handleClientConnected() {
+        connectionEpoch &+= 1
         sessions.removeAll()
         publishSessionCount(0)
-        publishStatus(.clientConnected)
-        log("Client connected")
-
-        let source = DispatchSource.makeReadSource(fileDescriptor: fd, queue: ioQueue)
-        source.setEventHandler { [weak self] in
-            self?.readFromClient(fd: fd)
-        }
-        source.resume()
-        readSource = source
+        clearClientSuppliedConfiguration(logChange: false)
     }
 
-    private func disconnectClient() {
-        readSource?.cancel()
-        readSource = nil
-        if clientFd >= 0 {
-            close(clientFd)
-            clientFd = -1
-        }
-        clientInfo = nil
-        publishConnectedClient(nil)
+    private func handleClientTeardown() {
+        connectionEpoch &+= 1
         for sessionId in sessions {
             frameServer.revoke(sessionId: sessionId)
         }
@@ -260,45 +143,15 @@ final class MockCameraServer: ObservableObject {
         publishSessionCount(0)
         frameServer.revokeAll()
         clearClientSuppliedConfiguration(logChange: true)
-        publishStatus(serverFd >= 0 ? .listening : .stopped)
-        log("Client disconnected")
     }
 
-    private func readFromClient(fd: Int32) {
-        var buffer = [UInt8](repeating: 0, count: 4096)
-        let n = read(fd, &buffer, buffer.count)
-        guard n > 0 else {
-            disconnectClient()
-            return
-        }
-        readBuffer.append(contentsOf: buffer[0..<n])
+    // MARK: - Protocol handling (transport I/O queue)
 
-        while let newlineIndex = readBuffer.firstIndex(of: 0x0A) {
-            let line = readBuffer.prefix(upTo: newlineIndex)
-            readBuffer.removeSubrange(...newlineIndex)
-            guard !line.isEmpty,
-                  let json = try? JSONSerialization.jsonObject(with: line) as? [String: Any],
-                  let type = json["type"] as? String
-            else {
-                continue
-            }
-            handle(type: type, message: json)
-        }
-    }
-
-    private func handle(type: String, message: [String: Any]) {
+    private func handle(_ message: [String: Any]) {
+        guard let type = message["type"] as? String else { return }
         switch type {
-            case "hello":
-                let info = SocketClientInfo(
-                    pid: (message["pid"] as? NSNumber)?.intValue ?? 0,
-                    bundleId: message["bundleId"] as? String ?? "unknown"
-                )
-                clientInfo = info
-                publishConnectedClient(info)
-                log("Hello from \(info.displayText)")
-
             case "listDevices":
-                send(["type": "didListDevices", "devices": currentWireDevices], to: clientFd)
+                transport.send(["type": "didListDevices", "devices": currentWireDevices])
 
             case "setMockConfiguration":
                 handleSetMockConfiguration(message)
@@ -306,27 +159,27 @@ final class MockCameraServer: ObservableObject {
             case "clearMockConfiguration":
                 clearClientSuppliedConfiguration(logChange: true)
                 sendMockConfigurationResult(ok: true, error: nil)
-                send(["type": "devicesChanged", "devices": currentWireDevices], to: clientFd)
+                transport.send(["type": "devicesChanged", "devices": currentWireDevices])
 
             case "startSession":
                 guard let sessionId = (message["sessionId"] as? NSNumber)?.uint32Value,
                       let deviceID = message["deviceId"] as? String else { return }
                 guard currentDeviceIDs.contains(deviceID) else {
-                    send(["type": "didStartSession", "sessionId": sessionId, "ok": false,
-                          "error": "unknown device '\(deviceID)'"], to: clientFd)
+                    transport.send(["type": "didStartSession", "sessionId": sessionId, "ok": false,
+                                    "error": "unknown device '\(deviceID)'"])
                     return
                 }
-                let requestingFd = clientFd
+                let epoch = connectionEpoch
                 frameServer.authorize(sessionId: sessionId, deviceID: deviceID) { [weak self] in
                     guard let self else { return }
-                    self.ioQueue.async {
-                        guard self.clientFd == requestingFd else {
+                    self.transport.performOnIOQueue {
+                        guard self.connectionEpoch == epoch else {
                             self.frameServer.revoke(sessionId: sessionId)
                             return
                         }
                         self.sessions.insert(sessionId)
                         self.publishSessionCount(self.sessions.count)
-                        self.send(["type": "didStartSession", "sessionId": sessionId, "ok": true], to: requestingFd)
+                        self.transport.send(["type": "didStartSession", "sessionId": sessionId, "ok": true])
                         self.log("Session \(sessionId) started (\(deviceID))")
                     }
                 }
@@ -336,7 +189,7 @@ final class MockCameraServer: ObservableObject {
                 sessions.remove(sessionId)
                 publishSessionCount(sessions.count)
                 frameServer.revoke(sessionId: sessionId)
-                send(["type": "didStopSession", "sessionId": sessionId], to: clientFd)
+                transport.send(["type": "didStopSession", "sessionId": sessionId])
                 log("Session \(sessionId) stopped")
 
             case "capturePhoto":
@@ -344,15 +197,15 @@ final class MockCameraServer: ObservableObject {
                       let requestId = (message["requestId"] as? NSNumber)?.uint32Value else { return }
                 frameServer.captureStill(sessionId: sessionId) { [weak self] frame in
                     guard let self else { return }
-                    self.ioQueue.async {
+                    self.transport.performOnIOQueue {
                         if let frame {
-                            self.send(["type": "didCapturePhoto", "sessionId": sessionId, "requestId": requestId,
-                                       "ok": true, "width": frame.width, "height": frame.height,
-                                       "dataBase64": frame.jpeg.base64EncodedString()], to: self.clientFd)
+                            self.transport.send(["type": "didCapturePhoto", "sessionId": sessionId, "requestId": requestId,
+                                                 "ok": true, "width": frame.width, "height": frame.height,
+                                                 "dataBase64": frame.jpeg.base64EncodedString()])
                             self.log("Photo \(requestId) captured (\(frame.width)×\(frame.height))")
                         } else {
-                            self.send(["type": "didCapturePhoto", "requestId": requestId, "ok": false,
-                                       "error": "no frame available for session \(sessionId)"], to: self.clientFd)
+                            self.transport.send(["type": "didCapturePhoto", "requestId": requestId, "ok": false,
+                                                 "error": "no frame available for session \(sessionId)"])
                         }
                     }
                 }
@@ -362,7 +215,7 @@ final class MockCameraServer: ObservableObject {
         }
     }
 
-    // MARK: - Client-supplied configuration (ioQueue)
+    // MARK: - Client-supplied configuration (transport I/O queue)
 
     private var currentWireDevices: [[String: Any]] {
         clientSuppliedConfiguration?.wireDevices ?? Self.devices
@@ -386,7 +239,7 @@ final class MockCameraServer: ObservableObject {
                 configuration.devices.map { ($0.id, $0.source) }))
             publishClientConfiguration(configuration)
             sendMockConfigurationResult(ok: true, error: nil)
-            send(["type": "devicesChanged", "devices": currentWireDevices], to: clientFd)
+            transport.send(["type": "devicesChanged", "devices": currentWireDevices])
             log("Client supplied configuration '\(configuration.name)' with \(configuration.devices.count) device(s)")
         } catch {
             log("Rejected client configuration: \(error.localizedDescription)")
@@ -407,35 +260,10 @@ final class MockCameraServer: ObservableObject {
     private func sendMockConfigurationResult(ok: Bool, error: String?) {
         var message: [String: Any] = ["type": "didSetMockConfiguration", "ok": ok]
         if let error { message["error"] = error }
-        send(message, to: clientFd)
-    }
-
-    private func send(_ message: [String: Any], to fd: Int32) {
-        guard fd >= 0, var data = try? JSONSerialization.data(withJSONObject: message) else { return }
-        data.append(0x0A)
-        data.withUnsafeBytes { buffer in
-            var offset = 0
-            while offset < buffer.count {
-                let written = write(fd, buffer.baseAddress!.advanced(by: offset), buffer.count - offset)
-                guard written > 0 else { return }
-                offset += written
-            }
-        }
+        transport.send(message)
     }
 
     // MARK: - Publishing
-
-    private func publishStatus(_ status: Status) {
-        DispatchQueue.main.async {
-            self.status = status
-        }
-    }
-
-    private func publishConnectedClient(_ info: SocketClientInfo?) {
-        DispatchQueue.main.async {
-            self.connectedClient = info
-        }
-    }
 
     private func publishSessionCount(_ count: Int) {
         DispatchQueue.main.async {
@@ -454,9 +282,7 @@ final class MockCameraServer: ObservableObject {
 
     private func log(_ message: String) {
         NSLog("CAMouflage-Mock: %@", message)
-        DispatchQueue.main.async {
-            self.lastActivity = message
-        }
+        transport.note(message)
     }
 
     private func flashTraffic() {

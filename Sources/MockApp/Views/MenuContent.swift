@@ -1,8 +1,10 @@
 import SwiftUI
 import UniformTypeIdentifiers
+import SimBridgeServer
 
 struct MenuContent: View {
     @ObservedObject var server: MockCameraServer
+    @ObservedObject var transport: ProtocolServer
     @ObservedObject var catalog: CameraCatalog
     @ObservedObject var controller: StatusBarController
     let onDismiss: () -> Void
@@ -268,7 +270,7 @@ struct MenuContent: View {
                 Text(statusText)
                     .font(.callout)
             }
-            if let client = server.connectedClient {
+            if let client = transport.connectedClient {
                 Text(client.displayText)
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -282,18 +284,20 @@ struct MenuContent: View {
     }
 
     private var statusColor: Color {
-        switch server.status {
+        switch transport.status {
             case .stopped: .red
             case .listening: .yellow
             case .clientConnected: server.trafficActive ? .green : .teal
+            case .blocked: .orange
         }
     }
 
     private var statusText: String {
-        switch server.status {
+        switch transport.status {
             case .stopped: "Stopped"
             case .listening: "Waiting for a simulator app…"
             case .clientConnected: server.trafficActive ? "Streaming frames" : "Client connected"
+            case .blocked(let message): message
         }
     }
 

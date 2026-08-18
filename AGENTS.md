@@ -10,9 +10,17 @@
   (`CMFFrameStream`). The control socket opens lazily on first capture-API use.
 - `Sources/MockApp` builds `CAMouflage-Mock.app`, the host-side menu bar
   provider (own `Package.swift`, built via `swift build` through the Makefile).
-  `MockCameraServer` owns the control socket, `FrameServer` the frame socket,
-  `FrameProducer` renders fixtures (test pattern / image / movie / generated
-  machine code → JPEG).
+  The control-plane transport is SimBridgeKit's `ProtocolServer`
+  (`MockCameraServer.transport`, URL dependency on
+  github.com/mickeyl/SimBridgeKit) — socket lifecycle, NDJSON framing, the
+  `hello` handshake, last-connection-wins takeover, client-socket hardening
+  (SO_NOSIGPIPE + send timeout: a client that stops reading is disconnected
+  instead of wedging the I/O queue), and the socket-ownership guard (a second
+  provider instance shows Blocked instead of stealing the socket).
+  `MockCameraServer` is the domain layer on top; its handlers run on the
+  transport's I/O queue, which also guards its mutable state. `FrameServer`
+  owns the frame socket, `FrameProducer` renders fixtures (test pattern /
+  image / movie / generated machine code → JPEG).
 - **Passthrough lives in the same app**, not a separate helper. In passthrough
   mode `FrameServer` serves frames from a shared `CameraCaptureSource` (a real
   `AVCaptureSession` on a selected Mac camera → JPEG) instead of a fixture.
@@ -44,11 +52,19 @@ sends `connectionRejected {clientBusy}` to the **previous** client (whose librar
 then stops auto-reconnecting) and evicts it, then accepts the newcomer. This is
 what makes relaunching the app, or switching between simulators, "just work" —
 the freshly launched one wins. To use an older simulator again, relaunch its app.
+Since the SimBridgeKit adoption this lives in `ProtocolServer`; async work that
+outlives a message handler (e.g. frame-stream authorization) must capture
+`MockCameraServer.connectionEpoch` and re-check it on completion, because the
+client fd is no longer exposed.
 
-All four Unix socket creation paths set `SO_NOSIGPIPE` (control and frame,
-provider and simulator). Keep it that way: takeover/disconnect races routinely
-make a final write hit a closed peer, and the default SIGPIPE action would kill
-the whole provider or client process instead of returning a write error.
+All Unix socket creation paths set `SO_NOSIGPIPE` (the control plane via
+SimBridgeKit, the frame plane and the simulator side locally). Keep it that way:
+takeover/disconnect races routinely make a final write hit a closed peer, and
+the default SIGPIPE action would kill the whole provider or client process
+instead of returning a write error. The control plane additionally inherits
+SimBridgeKit's send-timeout discipline (a non-reading client is disconnected
+instead of wedging the I/O queue); the frame plane has no equivalent yet — its
+writes run on the frame server's own queue, not the control queue.
 
 Frame plane: client connects, sends one JSON hello line `{"sessionId": n}`,
 then reads binary frames. **The 32-byte little-endian header is a cross-target
