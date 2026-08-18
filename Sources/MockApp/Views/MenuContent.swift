@@ -1,15 +1,18 @@
 import SwiftUI
 import UniformTypeIdentifiers
 import SimBridgeServer
+import SimBridgeShell
 
 struct MenuContent: View {
     @ObservedObject var server: MockCameraServer
     @ObservedObject var transport: ProtocolServer
     @ObservedObject var catalog: CameraCatalog
-    @ObservedObject var controller: StatusBarController
+    @ObservedObject var controller: ModeTransitionController<ProviderMode>
     let onDismiss: () -> Void
 
-    @State private var dismissOnDeactivate = AppPreferences.dismissControlWindowOnDeactivate
+    @State private var dismissOnDeactivate = ShellPreferences.dismissControlWindowOnDeactivate
+    @State private var launchAtLogin = MenuContent.launchAgent.isEnabled
+    private static let launchAgent = LaunchAtLogin(label: "de.vanille.camouflage-mock")
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -60,7 +63,7 @@ struct MenuContent: View {
     }
 
     private var modePicker: some View {
-        Picker("Mode", selection: $controller.mode) {
+        Picker("Mode", selection: modeBinding) {
             ForEach(ProviderMode.allCases) { mode in
                 Text(mode.title)
                     .tag(mode)
@@ -68,7 +71,15 @@ struct MenuContent: View {
         }
         .pickerStyle(.segmented)
         .labelsHidden()
+        .disabled(controller.isSwitching)
         .help("Off shows no cameras · Mock serves a fixture · Passthrough forwards a real Mac camera.")
+    }
+
+    private var modeBinding: Binding<ProviderMode> {
+        Binding(
+            get: { controller.mode },
+            set: { controller.select($0) }
+        )
     }
 
     private var fixtureSection: some View {
@@ -308,7 +319,13 @@ struct MenuContent: View {
                 .toggleStyle(.checkbox)
                 .font(.caption)
                 .onChange(of: dismissOnDeactivate) { _, newValue in
-                    AppPreferences.dismissControlWindowOnDeactivate = newValue
+                    ShellPreferences.dismissControlWindowOnDeactivate = newValue
+                }
+            Toggle("Launch at login", isOn: $launchAtLogin)
+                .toggleStyle(.checkbox)
+                .font(.caption)
+                .onChange(of: launchAtLogin) { _, newValue in
+                    Self.launchAgent.setEnabled(newValue)
                 }
             HStack {
                 Button("Quit CAMouflage") {

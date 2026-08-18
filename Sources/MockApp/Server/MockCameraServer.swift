@@ -91,18 +91,18 @@ final class MockCameraServer: ObservableObject {
     // MARK: - Source mode
 
     /// Serve the currently selected fixture. Idempotently brings the sockets up.
-    func useMock() {
+    func useMock(completion: (() -> Void)? = nil) {
         sourceMode = .mock
-        start()
+        start(completion: completion)
         frameServer.useFixture(fixture)
     }
 
     /// Forward a real Mac camera. `deviceID` may be nil until the user picks one
     /// (or grants camera access); frames start flowing once a device is set.
-    func usePassthrough(deviceID: String?) {
+    func usePassthrough(deviceID: String?, completion: (() -> Void)? = nil) {
         sourceMode = .passthrough
         passthroughDeviceID = deviceID
-        start()
+        start(completion: completion)
         frameServer.usePassthrough(deviceID: deviceID)
     }
 

@@ -12,6 +12,7 @@ let package = Package(
             name: "CAMouflage-Mock",
             dependencies: [
                 .product(name: "SimBridgeServer", package: "SimBridgeKit"),
+                .product(name: "SimBridgeShell", package: "SimBridgeKit"),
             ],
             path: ".",
             exclude: [
@@ -22,11 +23,9 @@ let package = Package(
             sources: [
                 "MockApp.swift",
                 "StatusBarController.swift",
-                "Models/AppPreferences.swift",
                 "Models/AppVersion.swift",
                 "Models/ClientMockConfiguration.swift",
                 "Models/FixtureSource.swift",
-                "Models/ProviderMode.swift",
                 "Server/MockCameraServer.swift",
                 "Server/FrameServer.swift",
                 "Server/FrameProducer.swift",
