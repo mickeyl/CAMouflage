@@ -5,10 +5,10 @@ INSTALL_DIR = $(prefix)/bin
 MOCK_CODESIGN_MATCH ?= Developer ID Application
 MOCK_SIGN_IDENTITY := $(shell security find-identity -v -p codesigning | awk -F'"' '/$(MOCK_CODESIGN_MATCH)/ {print $$2; exit}')
 MOCK_CODESIGN_FLAGS ?= --options runtime --timestamp
-MOCK_SRCS = $(shell find Sources/MockApp -name '*.swift' 2>/dev/null)
-MOCK_PLIST = Sources/MockApp/Resources/Info.plist
-MOCK_ENTITLEMENTS = Sources/MockApp/Resources/entitlements.plist
-MOCK_ICON = Sources/MockApp/Resources/CAMouflage.icns
+MOCK_SRCS = $(shell find Sources/CAMouflage-Mock -name '*.swift' 2>/dev/null)
+MOCK_PLIST = Sources/CAMouflage-Mock/Resources/Info.plist
+MOCK_ENTITLEMENTS = Sources/CAMouflage-Mock/Resources/entitlements.plist
+MOCK_ICON = Sources/CAMouflage-Mock/Resources/CAMouflage.icns
 MOCK_BUNDLE = CAMouflage-Mock.app
 MOCK_BIN = $(MOCK_BUNDLE)/Contents/MacOS/CAMouflage-Mock
 MOCK_BIN_NAME = CAMouflage-Mock
@@ -77,8 +77,8 @@ mock-build-debug:
 	@cp $(MOCK_PLIST) $(MOCK_BUNDLE)/Contents/Info.plist
 	@cp $(MOCK_ICON) $(MOCK_BUNDLE)/Contents/Resources/CAMouflage.icns
 	@if [ -n "$(BUILD_NUMBER)" ]; then /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $(BUILD_NUMBER)" $(MOCK_BUNDLE)/Contents/Info.plist; fi
-	@cd Sources/MockApp && swift build $(SWIFTPM_FLAGS) 2>&1 | tail -3
-	@cp Sources/MockApp/.build/debug/$(MOCK_BIN_NAME) $(MOCK_BIN)
+	@cd Sources/CAMouflage-Mock && swift build $(SWIFTPM_FLAGS) 2>&1 | tail -3
+	@cp Sources/CAMouflage-Mock/.build/debug/$(MOCK_BIN_NAME) $(MOCK_BIN)
 	@codesign --force --sign - --entitlements $(MOCK_ENTITLEMENTS) $(MOCK_BUNDLE) >/dev/null
 	@xattr -cr $(MOCK_BUNDLE) 2>/dev/null || true
 
@@ -92,8 +92,8 @@ $(MOCK_BIN): $(MOCK_SRCS) $(MOCK_PLIST) $(MOCK_ENTITLEMENTS) $(MOCK_ICON)
 	cp $(MOCK_PLIST) $(MOCK_BUNDLE)/Contents/Info.plist
 	cp $(MOCK_ICON) $(MOCK_BUNDLE)/Contents/Resources/CAMouflage.icns
 	@if [ -n "$(BUILD_NUMBER)" ]; then /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $(BUILD_NUMBER)" $(MOCK_BUNDLE)/Contents/Info.plist; fi
-	cd Sources/MockApp && swift build $(SWIFTPM_FLAGS) -c release
-	cp Sources/MockApp/.build/release/$(MOCK_BIN_NAME) $(MOCK_BIN)
+	cd Sources/CAMouflage-Mock && swift build $(SWIFTPM_FLAGS) -c release
+	cp Sources/CAMouflage-Mock/.build/release/$(MOCK_BIN_NAME) $(MOCK_BIN)
 	@if [ -z "$(MOCK_SIGN_IDENTITY)" ]; then \
 		echo "WARNING: No codesigning identity matching '$(MOCK_CODESIGN_MATCH)' found in your keychain."; \
 		echo "Signing the mock app ad hoc. Gatekeeper will reject quarantined or distributed copies."; \
@@ -167,4 +167,4 @@ mock-clean:
 	rm -rf $(MOCK_BUNDLE) $(MOCK_DIST_ZIP)
 
 clean: mock-clean
-	rm -rf .build Sources/MockApp/.build
+	rm -rf .build Sources/CAMouflage-Mock/.build

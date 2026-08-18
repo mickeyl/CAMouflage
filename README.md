@@ -163,7 +163,7 @@ assert the `AVCaptureMetadataOutput` callback.
 | Path | Contents |
 |---|---|
 | `Sources/CAMouflage` | Simulator-side library (Objective-C, `CMF` prefix) |
-| `Sources/MockApp` | `CAMouflage-Mock.app` menu bar provider (SwiftPM) |
+| `Sources/CAMouflage-Mock` | `CAMouflage-Mock.app` menu bar provider (SwiftPM) |
 | `SampleApp` | xcodegen demo and client-owned QR fixture XCTest |
 | `PLAN.md` | Full roadmap and per-phase status |
 | `AGENTS.md` | Architecture invariants, wire protocol, validation recipe |

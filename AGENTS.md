@@ -8,7 +8,7 @@
   `/tmp/camouflage.sock` (`CMFConnection`, a direct port of ImpossiBLE's
   `CBSConnection`) and binary frames on `/tmp/camouflage-frames.sock`
   (`CMFFrameStream`). The control socket opens lazily on first capture-API use.
-- `Sources/MockApp` builds `CAMouflage-Mock.app`, the host-side menu bar
+- `Sources/CAMouflage-Mock` builds `CAMouflage-Mock.app`, the host-side menu bar
   provider (own `Package.swift`, built via `swift build` through the Makefile).
   It has two targets: **`CAMouflageProviderKit`** (library product
   `ProviderKit/` — camera server, frame plane, fixtures, catalog, panel view;
