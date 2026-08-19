@@ -117,12 +117,9 @@ uninstall:
 	@echo "Uninstalled from $(INSTALL_DIR)"
 
 mac-run: mac-install
-	@if ! pgrep -f $(MAC_BIN_NAME) > /dev/null 2>&1; then \
-		open "$(INSTALLED_MAC_APP)"; \
-		echo "CAMouflage-Mac started"; \
-	else \
-		echo "CAMouflage-Mac already running"; \
-	fi
+	@pkill -f "$(MAC_BIN_NAME).app/Contents/MacOS" 2>/dev/null && sleep 0.5 || true
+	@open "$(INSTALLED_MAC_APP)"
+	@echo "CAMouflage-Mac started"
 
 mac-stop:
 	@pid=$$(pgrep -f "$(MAC_BIN_NAME).app/Contents/MacOS" 2>/dev/null); \
