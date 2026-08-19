@@ -12,17 +12,22 @@ public struct CAMouflageSection: View {
     @ObservedObject var transport: ProtocolServer
     @ObservedObject var catalog: CameraCatalog
     @ObservedObject var controller: ModeTransitionController<ProviderMode>
+    /// A host that surfaces the connected client on its own level (the suite
+    /// does) passes false; the section then omits its client display.
+    var showsClient: Bool
 
     public init(
         server: MockCameraServer,
         transport: ProtocolServer,
         catalog: CameraCatalog,
-        controller: ModeTransitionController<ProviderMode>
+        controller: ModeTransitionController<ProviderMode>,
+        showsClient: Bool = true
     ) {
         self.server = server
         self.transport = transport
         self.catalog = catalog
         self.controller = controller
+        self.showsClient = showsClient
     }
 
     public var body: some View {
@@ -291,7 +296,7 @@ public struct CAMouflageSection: View {
                 Text(statusText)
                     .font(.callout)
             }
-            if let client = transport.connectedClient {
+            if showsClient, let client = transport.connectedClient {
                 Text(client.displayText)
                     .font(.caption)
                     .foregroundStyle(.secondary)
