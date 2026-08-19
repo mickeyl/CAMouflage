@@ -14,7 +14,7 @@
 	* Transport: NDJSON control plane on /tmp/camouflage.sock,
 	  length-prefixed binary JPEG frame plane on
 	  /tmp/camouflage-frames.sock (32-byte little-endian header).
-	* CAMouflage-Mock menu bar app: Off/Mock modes (Passthrough
+	* CAMouflage-Mac menu bar app: Off/Mock modes (Passthrough
 	  stubbed), fixtures for SMPTE-style test pattern with timestamp
 	  burn-in, static image, and looping movie; live fixture
 	  switching; persisted state.

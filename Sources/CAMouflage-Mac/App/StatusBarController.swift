@@ -18,7 +18,7 @@ final class StatusBarController: NSObject, ObservableObject {
     private static let controlWindowContentSize = NSSize(width: 400, height: 700)
 
     /// The persisted mode keeps its historic defaults key so headless setups
-    /// (`defaults write de.vanille.camouflage-mock ProviderMode …`) carry over.
+    /// (`defaults write de.vanille.camouflage-mac ProviderMode …`) carry over.
     private static let modeDefaultsKey = "ProviderMode"
 
     init(server: MockCameraServer) {

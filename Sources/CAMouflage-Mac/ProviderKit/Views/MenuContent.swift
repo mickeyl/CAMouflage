@@ -13,7 +13,7 @@ public struct MenuContent: View {
 
     @State private var dismissOnDeactivate = ShellPreferences.dismissControlWindowOnDeactivate
     @State private var launchAtLogin = MenuContent.launchAgent.isEnabled
-    private static let launchAgent = LaunchAtLogin(label: "de.vanille.camouflage-mock")
+    private static let launchAgent = LaunchAtLogin(label: "de.vanille.camouflage-mac")
 
     public init(
         server: MockCameraServer,

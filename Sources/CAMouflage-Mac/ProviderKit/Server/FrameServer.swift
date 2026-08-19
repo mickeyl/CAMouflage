@@ -60,7 +60,7 @@ final class FrameServer {
 
             let fd = socket(AF_UNIX, SOCK_STREAM, 0)
             guard fd >= 0 else {
-                NSLog("CAMouflage-Mock: frame socket() failed")
+                NSLog("CAMouflage-Mac: frame socket() failed")
                 return
             }
             suppressFrameSIGPIPE(on: fd)
@@ -81,7 +81,7 @@ final class FrameServer {
                 }
             }
             guard bindResult == 0, listen(fd, 4) == 0 else {
-                NSLog("CAMouflage-Mock: frame socket bind/listen failed: %d", errno)
+                NSLog("CAMouflage-Mac: frame socket bind/listen failed: %d", errno)
                 close(fd)
                 return
             }
@@ -274,12 +274,12 @@ final class FrameServer {
               let json = try? JSONSerialization.jsonObject(with: hello.prefix(upTo: newlineIndex)) as? [String: Any],
               let sessionId = (json["sessionId"] as? NSNumber)?.uint32Value
         else {
-            NSLog("CAMouflage-Mock: malformed frame stream hello")
+            NSLog("CAMouflage-Mac: malformed frame stream hello")
             close(fd)
             return
         }
         guard authorizedSessions.contains(sessionId) else {
-            NSLog("CAMouflage-Mock: rejecting frame stream for unknown session %u", sessionId)
+            NSLog("CAMouflage-Mac: rejecting frame stream for unknown session %u", sessionId)
             close(fd)
             return
         }
@@ -292,7 +292,7 @@ final class FrameServer {
         streams[sessionId] = stream
         updateCameraRunState()
         startTimer(for: stream)
-        NSLog("CAMouflage-Mock: frame stream started for session %u", sessionId)
+        NSLog("CAMouflage-Mac: frame stream started for session %u", sessionId)
     }
 
     private func startTimer(for stream: Stream) {
@@ -341,7 +341,7 @@ final class FrameServer {
                 onTraffic?()
             }
         } else {
-            NSLog("CAMouflage-Mock: frame stream write failed for session %u, closing", stream.sessionId)
+            NSLog("CAMouflage-Mac: frame stream write failed for session %u, closing", stream.sessionId)
             stream.timer?.cancel()
             close(stream.fd)
             streams.removeValue(forKey: stream.sessionId)

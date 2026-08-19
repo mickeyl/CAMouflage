@@ -3,7 +3,7 @@ import AppKit
 import CAMouflageProviderKit
 
 @MainActor
-private final class MockAppRuntime {
+private final class MacAppRuntime {
     let server: MockCameraServer
     let statusBar: StatusBarController
 
@@ -14,14 +14,14 @@ private final class MockAppRuntime {
 }
 
 @main
-struct MockApp: App {
-    fileprivate static var retainedRuntime: MockAppRuntime?
+struct MacApp: App {
+    fileprivate static var retainedRuntime: MacAppRuntime?
 
     @StateObject private var server: MockCameraServer
     @StateObject private var statusBar: StatusBarController
 
     init() {
-        let runtime = Self.retainedRuntime ?? MockAppRuntime()
+        let runtime = Self.retainedRuntime ?? MacAppRuntime()
         Self.retainedRuntime = runtime
 
         _server = StateObject(wrappedValue: runtime.server)

@@ -8,12 +8,12 @@
   `/tmp/camouflage.sock` (`CMFConnection`, a direct port of ImpossiBLE's
   `CBSConnection`) and binary frames on `/tmp/camouflage-frames.sock`
   (`CMFFrameStream`). The control socket opens lazily on first capture-API use.
-- `Sources/CAMouflage-Mock` builds `CAMouflage-Mock.app`, the host-side menu bar
+- `Sources/CAMouflage-Mac` builds `CAMouflage-Mac.app`, the host-side menu bar
   provider (own `Package.swift`, built via `swift build` through the Makefile).
   It has two targets: **`CAMouflageProviderKit`** (library product
   `ProviderKit/` — camera server, frame plane, fixtures, catalog, panel view;
   this is what the Simsalabim suite app will embed) and the thin
-  **`CAMouflage-Mock`** executable (`App/` — app lifecycle plus the shell
+  **`CAMouflage-Mac`** executable (`App/` — app lifecycle plus the shell
   wiring in `StatusBarController`). The ProviderKit's public surface:
   `MockCameraServer` (facade with `transport` and the frame-traffic pulse),
   `CameraCatalog`, and `MenuContent`; everything else is internal.
@@ -110,9 +110,9 @@ ptsMicros). The pixel-format tag is the seam for a future zero-copy upgrade.
 - `AVCaptureVideoDataOutput.alwaysDiscardsLateVideoFrames` is honored at the
   delegate boundary. With it enabled, at most one callback per output is queued
   or executing.
-- The mock app persists `ProviderMode`, `ServerEnabled`, `Fixture` (JSON data),
+- The Mac app persists `ProviderMode`, `ServerEnabled`, `Fixture` (JSON data),
   and `PassthroughDeviceID` (the selected Mac camera's `uniqueID`) in
-  `de.vanille.camouflage-mock` defaults — headless testing can seed these with
+  `de.vanille.camouflage-mac` defaults — headless testing can seed these with
   `defaults write` before launch. `ProviderMode` is the single source of
   truth for whether the provider runs: the mode transition (SimBridgeShell's
   `ModeTransitionController`, wired in `StatusBarController`) starts the
@@ -129,12 +129,12 @@ ptsMicros). The pixel-format tag is the seam for a future zero-copy upgrade.
   `NSCameraUsageDescription` (in `Resources/Info.plist`) and a one-time TCC
   grant; ad-hoc dev builds get a fresh identity each rebuild, so macOS re-prompts.
 - **Hardened Runtime needs the camera entitlement.** Release builds are
-  Developer ID signed with `--options runtime` (`make mock`), and the Hardened
+  Developer ID signed with `--options runtime` (`make mac`), and the Hardened
   Runtime *blocks* `AVCaptureSession` unless
   `com.apple.security.device.camera` is in `Resources/entitlements.plist` —
   `NSCameraUsageDescription` is necessary but not sufficient. Symptom when it is
   missing: passthrough silently fails ("permission not granted") on the installed
-  release app while `make mock-debug` (ad-hoc, no Hardened Runtime, entitlement
+  release app while `make mac-debug` (ad-hoc, no Hardened Runtime, entitlement
   not enforced) works fine — the classic "works in debug, denied in release" trap.
 
 ## Client-supplied fixtures
@@ -189,8 +189,8 @@ ptsMicros). The pixel-format tag is the seam for a future zero-copy upgrade.
   that touch the SampleApp or the library, or a stale incremental build can run
   old/broken code.
 - **Blank screen at launch = no provider running (usually).** The SampleApp
-  shows a black "No camera — is the CAMouflage mock app running?" placeholder
-  until the first frame arrives. Start the mock app (Mock or Passthrough) and
+  shows a black "No camera — is the CAMouflage Mac app running?" placeholder
+  until the first frame arrives. Start the Mac app (Mock or Passthrough) and
   frames appear. On some iOS Simulator runtimes (seen on the iOS 26/27 betas) a
   freshly launched app with no frames yet can get stuck showing the blank launch
   image until something forces a window re-layout (a rotation, a tap, or the
@@ -200,14 +200,14 @@ ptsMicros). The pixel-format tag is the seam for a future zero-copy upgrade.
 ## Validation
 
 ```bash
-make mock && open CAMouflage-Mock.app          # provider (Mock mode in panel)
+make mac && open CAMouflage-Mac.app          # provider (Mock mode in panel)
 cd SampleApp && xcodegen generate
 xcodebuild -project SampleApp.xcodeproj -scheme SampleApp \
   -destination 'platform=iOS Simulator,id=<UDID>' build
 xcrun simctl install <UDID> <built .app> && xcrun simctl launch <UDID> de.vanille.camouflage-sample
 xcrun simctl io <UDID> screenshot check.png    # expect fixture + rising frame counter
 
-# With CAMouflage-Mock running, validates client-owned QR fixtures end-to-end:
+# With CAMouflage-Mac running, validates client-owned QR fixtures end-to-end:
 xcodebuild -project SampleApp.xcodeproj -scheme SampleAppTests \
   -destination 'platform=iOS Simulator,id=<UDID>' test
 ```

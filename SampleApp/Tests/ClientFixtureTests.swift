@@ -13,7 +13,7 @@ final class ClientFixtureTests: XCTestCase {
 
     func testClientSuppliedQRCodeReachesMetadataDelegate() throws {
         guard CAMouflageIsProviderConnected() else {
-            XCTFail("Start CAMouflage-Mock in Mock mode before running this test.")
+            XCTFail("Start CAMouflage-Mac in Mock mode before running this test.")
             return
         }
 

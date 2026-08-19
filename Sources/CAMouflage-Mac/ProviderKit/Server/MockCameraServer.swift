@@ -64,7 +64,7 @@ public final class MockCameraServer: ObservableObject {
     public init() {
         transport = ProtocolServer(
             socketPath: kControlSocketPath,
-            name: "CAMouflage-Mock",
+            name: "CAMouflage-Mac",
             appVersion: AppVersion.current
         )
         transport.onMessage = { [weak self] message in
@@ -285,7 +285,7 @@ public final class MockCameraServer: ObservableObject {
     }
 
     private func log(_ message: String) {
-        NSLog("CAMouflage-Mock: %@", message)
+        NSLog("CAMouflage-Mac: %@", message)
         transport.note(message)
     }
 

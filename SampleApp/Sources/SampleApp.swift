@@ -96,7 +96,7 @@ struct ContentView: View {
             Text(camera.statusText)
                 .font(.headline)
                 .foregroundStyle(.white)
-            Text("Make sure the CAMouflage mock app is running (Mock or Passthrough).")
+            Text("Make sure the CAMouflage Mac app is running (Mock or Passthrough).")
                 .font(.callout)
                 .foregroundStyle(.white.opacity(0.7))
                 .multilineTextAlignment(.center)
@@ -331,7 +331,7 @@ final class CameraController: NSObject, ObservableObject {
     nonisolated private func configure() {
         guard CAMouflageIsProviderConnected() else {
             Task { @MainActor in
-                self.statusText = "No camera — is the CAMouflage mock app running?"
+                self.statusText = "No camera — is the CAMouflage Mac app running?"
             }
             scheduleConfigurationRetry()
             return

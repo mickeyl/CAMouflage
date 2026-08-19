@@ -56,7 +56,7 @@ CAMouflage is a two-process architecture:
    socket (`/tmp/camouflage.sock`); video frames arrive on a separate binary
    frame socket (`/tmp/camouflage-frames.sock`) as length-prefixed JPEG.
 
-2. **Mock menu bar app** (runs natively on macOS) — Owns both sockets and
+2. **Mac menu bar app** (runs natively on macOS) — Owns both sockets and
    serves virtual camera devices. In **Mock** mode the source is a configurable
    fixture: SMPTE-style test pattern with timestamp burn-in, a static image, or a
    looping movie file. In **Passthrough** mode the source is a real camera
@@ -92,8 +92,8 @@ can be re-extracted later without touching the library or the wire format.
 ## Quick Start
 
 ```bash
-# Build and start the mock menu bar app, then select "Mock" in its panel
-make mock-run
+# Build and start the Mac menu bar app, then select "Mock" in its panel
+make mac-run
 
 # In Xcode: add CAMouflage as a local Swift package dependency,
 # then build and run your app in the iOS Simulator.
@@ -107,18 +107,18 @@ cd SampleApp && xcodegen generate && open SampleApp.xcodeproj
 # feed, with a live frame counter at the bottom.
 ```
 
-For headless setups the mock app's state can be seeded before launch instead
+For headless setups the Mac app's state can be seeded before launch instead
 of clicking the panel (mode, server flag, and fixture live in its defaults
 domain):
 
 ```bash
-defaults write de.vanille.camouflage-mock ProviderMode mock
-defaults write de.vanille.camouflage-mock ServerEnabled -bool true
+defaults write de.vanille.camouflage-mac ProviderMode mock
+defaults write de.vanille.camouflage-mac ServerEnabled -bool true
 ```
 
 `make` without arguments lists all targets. Development loop: `make
-mock-relaunch` rebuilds a debug bundle and restarts the running app; `make
-log` tails its output; `make status` / `make mock-stop` manage the process.
+mac-relaunch` rebuilds a debug bundle and restarts the running app; `make
+log` tails its output; `make status` / `make mac-stop` manage the process.
 
 ### Test-owned fixtures
 
@@ -163,7 +163,7 @@ assert the `AVCaptureMetadataOutput` callback.
 | Path | Contents |
 |---|---|
 | `Sources/CAMouflage` | Simulator-side library (Objective-C, `CMF` prefix) |
-| `Sources/CAMouflage-Mock` | `CAMouflage-Mock.app` menu bar provider (SwiftPM) |
+| `Sources/CAMouflage-Mac` | `CAMouflage-Mac.app` menu bar provider (SwiftPM) |
 | `SampleApp` | xcodegen demo and client-owned QR fixture XCTest |
 | `PLAN.md` | Full roadmap and per-phase status |
 | `AGENTS.md` | Architecture invariants, wire protocol, validation recipe |

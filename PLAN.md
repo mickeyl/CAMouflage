@@ -72,7 +72,7 @@ Two-process split, identical to ImpossiBLE, plus a dedicated frame plane:
 ┌──────────────────────────────┐          ┌──────────────────────────────────┐
 │ iOS Simulator app            │          │ macOS host                       │
 │                              │  control │                                  │
-│  AVFoundation API surface    │  (NDJSON)│  CAMouflage-Mock.app             │
+│  AVFoundation API surface    │  (NDJSON)│  CAMouflage-Mac.app             │
 │  ── swizzled at +load ──►    ◄──────────►  Mock: fixture producers         │
 │  CMFActivator                │ /tmp/    │  Passthrough: AVCaptureSession   │
 │                              │ camouflage│  on the selected Mac camera     │
@@ -158,7 +158,7 @@ instantiates the shim against every new SDK to catch breakage early.
   and on `AVCaptureDeviceWasConnected/Disconnected` notifications.
 - Position mapping: the Mac's built-in camera is advertised as the simulator's
   *front* camera; Continuity Camera / external devices as *back* (configurable
-  later from the mock app's Passthrough panel).
+  later from the Mac app's Passthrough panel).
 - Per `startSession`: real `AVCaptureSession` + `AVCaptureVideoDataOutput`,
   JPEG-encodes frames (`VTCompressionSession` or `CIContext` JPEG, whichever
   measures better — decide in Phase 5 with numbers) at the client's negotiated
@@ -168,9 +168,9 @@ instantiates the shim against every new SDK to catch breakage early.
 - Needs macOS camera TCC consent (`NSCameraUsageDescription`, prompt on first
   session) — parity with the Bluetooth consent the ImpossiBLE helper already needs.
 - Writes `/tmp/camouflage-passthrough-activity.json` (which device is live, fps,
-  client app) for the mock app's Passthrough panel — same snapshot pattern.
+  client app) for the Mac app's Passthrough panel — same snapshot pattern.
 
-### Mock app (`Sources/MockApp`, SwiftPM, AppKit `StatusBarController` + SwiftUI content)
+### Mac app (`Sources/MacApp`, SwiftPM, AppKit `StatusBarController` + SwiftUI content)
 
 Direct port of the ImpossiBLE-Mock shell (status item, persistent panel,
 Off / Mock / Passthrough segmented control, mutual-exclusion daemon management,
@@ -236,7 +236,7 @@ ephemeral (never persisted into the user's saved configurations, cleared on both
 edges of the connection), visible (panel shows the served client configuration
 read-only), verified (`didSetMockConfiguration` reports decode failures).
 
-Configuration JSON shape (same file format the mock app saves/exports):
+Configuration JSON shape (same file format the Mac app saves/exports):
 
 ```json
 {
@@ -259,7 +259,7 @@ Configuration JSON shape (same file format the mock app saves/exports):
 CAMouflage/
 ├── Package.swift               # library only, iOS 15+, links AVFoundation
 ├── Makefile                    # ImpossiBLE Makefile ported: help default,
-│                               # helper/mock/install/run/stop/watch/notarize,
+│                               # helper/mac/install/run/stop/watch/notarize,
 │                               # git-count build number, codesign fallbacks
 ├── README.md                   # logo, pitch, quick start, modes, limitations
 ├── AGENTS.md                   # project shape + invariants (grow as they appear)
@@ -267,14 +267,14 @@ CAMouflage/
 ├── LICENSE                     # MIT
 ├── Sources/
 │   ├── CAMouflage/             # simulator-side ObjC library (CMF prefix)
-│   └── MockApp/                # own Package.swift, Server/ Models/ Views/ Resources/
+│   └── MacApp/                # own Package.swift, Server/ Models/ Views/ Resources/
 └── SampleApp/                  # iOS demo + client-fixture XCTest target
 ```
 
 Conventions that apply throughout: English comments (WHY only), no attribution
 trailers anywhere, `CFBundleVersion` from `git rev-list --count HEAD`,
 `.DEFAULT_GOAL := help`, guard-based early exit, 4-space indented `case`s,
-one SwiftUI view per file, `Cornucopia.Core.Logger` in the Swift mock app
+one SwiftUI view per file, `Cornucopia.Core.Logger` in the Swift Mac app
 (the ObjC library/helper use `os_log` like ImpossiBLE's, wrapped in a
 `CMFLog` macro that is compiled out unless `DEBUG`).
 
@@ -286,7 +286,7 @@ Each phase ends buildable and demonstrable; validation listed per phase.
 
 ### Phase 0 — Scaffold (½ day)
 Repo layout above; Makefile ported from ImpossiBLE with names swapped
-(`camouflage-helper`, `CAMouflage-Mock`, sockets, zips); empty-but-linking library
+(`camouflage-helper`, `CAMouflage-Mac`, sockets, zips); empty-but-linking library
 with `+load` logging under `TARGET_OS_SIMULATOR`; SampleApp shell.
 **Validate:** `make` prints help; `swift build` (library) succeeds for iOS
 simulator and device destinations; SampleApp runs in the simulator and logs the
@@ -334,7 +334,7 @@ plug/unplug → `devicesChanged`.
 **Validate:** SampleApp shows the Mac camera live; unplugging an external webcam
 mid-session ends that session cleanly; `make watch` loop stays usable.
 
-> **Delivered differently (2026-08-12): passthrough lives inside the mock app,
+> **Delivered differently (2026-08-12): passthrough lives inside the Mac app,
 > not a separate helper.** The simulator library is source-agnostic — it only
 > ever reads JPEG frames off the frame socket — so passthrough needs no wire or
 > library change, only a different frame source on the host. Rather than stand
@@ -346,7 +346,7 @@ mid-session ends that session cleanly; `make watch` loop stays usable.
 > separate-helper design in §2 is superseded for now; revisit it only if
 > passthrough and mock ever need to run simultaneously.
 
-### Phase 6 — Mock app (3–4 days)
+### Phase 6 — Mac app (3–4 days)
 Port the ImpossiBLE-Mock shell; implement the four fixture sources, the editor,
 stock configurations, persistence, and "record fixture from Mac camera".
 **Validate:** Off/Mock/Passthrough switching kills/starts the right daemons;
@@ -428,8 +428,8 @@ against a Logitech UVC webcam at 1920×1080). Validation evidence:
 | 2 — Discovery & authorization | ✅ done | Audio APIs pass through untouched |
 | 3 — Session + VideoDataOutput | ✅ done | Per-dimension `CVPixelBufferPool`, `alwaysDiscardsLateVideoFrames`, and automatic session resume after provider reconnect |
 | 4 — Preview layer | ✅ core path | Gravity + layout work; point/rect conversion not implemented |
-| 5 — Passthrough | ✅ done (in mock app) | Real camera enumeration (built-in/external/Continuity/Desk View), selectable source, live device switching, TCC prompt, camera runs only while a client streams. Integrated into the mock app rather than a separate helper (see Phase 5 note). Missing: fps/resolution negotiation, activity snapshot file, JPEG-encoder measurement |
-| 6 — Mock app | 🟡 preview subset | Test pattern / image / movie fixtures, generated client machine codes, passthrough source picker, live switching, persistence. Missing: per-device editor, stock configurations, capture-from-camera, launch-at-startup |
+| 5 — Passthrough | ✅ done (in Mac app) | Real camera enumeration (built-in/external/Continuity/Desk View), selectable source, live device switching, TCC prompt, camera runs only while a client streams. Integrated into the Mac app rather than a separate helper (see Phase 5 note). Missing: fps/resolution negotiation, activity snapshot file, JPEG-encoder measurement |
+| 6 — Mac app | 🟡 preview subset | Test pattern / image / movie fixtures, generated client machine codes, passthrough source picker, live switching, persistence. Missing: per-device editor, stock configurations, capture-from-camera, launch-at-startup |
 | 7 — Photo output | ✅ done | `capturePhoto` round-trip; `CMFPhoto`/`CMFResolvedPhotoSettings` shims; full delegate choreography. Photo is the current fixture/camera frame re-encoded (no separate full-res still yet) |
 | 8 — Metadata via Vision | ✅ done | In-process `VNDetectBarcodesRequest` on delivered frames, throttled ~10 Hz; `AVMetadataMachineReadableCodeObject` shims with stringValue/type/bounds/corners; `rectOfInterest` honored. Simulator needs the classical detector (see notes) |
 | 9 — Client-supplied fixtures | ✅ done | Public set/clear API, ephemeral provider override, read-only panel state, QR generator, and headless SampleApp XCTest |
@@ -444,7 +444,7 @@ Current limitations beyond the table:
   resolution/fps — it serves the camera's native format re-encoded as JPEG.
 - Passthrough does not mirror or rotate frames; the built-in FaceTime camera is
   served as-is (position mapping and mirroring are on the backlog).
-- The mock app is ad-hoc signed in dev builds, so each rebuild is a new TCC
+- The Mac app is ad-hoc signed in dev builds, so each rebuild is a new TCC
   identity and macOS re-prompts for camera access on first passthrough use.
 
 ### Suggested next steps, in order of leverage

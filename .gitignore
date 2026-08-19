@@ -2,7 +2,7 @@
 .swiftpm/
 *.app
 *.dSYM
-CAMouflage-Mock.zip
+CAMouflage-Mac.zip
 .DS_Store
 xcuserdata/
 SampleApp/SampleApp.xcodeproj/
