@@ -230,10 +230,15 @@ public struct CAMouflageSection: View {
         }
     }
 
+    /// The product's own icon. Present in the standalone bundle and copied
+    /// into the suite bundle by its Makefile, so the section shows CAMouflage
+    /// branding regardless of which host app embeds it.
+    private static let brandIcon = NSImage(named: "CAMouflage")
+
     private var offSection: some View {
         VStack(spacing: 14) {
             Spacer(minLength: 16)
-            Image(nsImage: NSApplication.shared.applicationIconImage)
+            Image(nsImage: Self.brandIcon ?? NSApplication.shared.applicationIconImage)
                 .resizable()
                 .aspectRatio(contentMode: .fit)
                 .frame(width: 148, height: 148)
