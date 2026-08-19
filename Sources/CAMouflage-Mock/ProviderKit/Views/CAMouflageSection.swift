@@ -235,10 +235,11 @@ public struct CAMouflageSection: View {
         }
     }
 
-    /// The product's own icon. Present in the standalone bundle and copied
+    /// The product's own icon, pre-scaled so redraws never pay for
+    /// downsampling the icns. Present in the standalone bundle and copied
     /// into the suite bundle by its Makefile, so the section shows CAMouflage
     /// branding regardless of which host app embeds it.
-    private static let brandIcon = NSImage(named: "CAMouflage")
+    private static let brandIcon = NSImage(named: "CAMouflage")?.sbkScaled(toPointSize: 148)
 
     private var offSection: some View {
         VStack(spacing: 14) {
@@ -248,6 +249,14 @@ public struct CAMouflageSection: View {
                 .aspectRatio(contentMode: .fit)
                 .frame(width: 148, height: 148)
                 .shadow(color: .black.opacity(0.25), radius: 8, y: 4)
+                // Rasterized once: a bare .shadow forces an offscreen blur on
+                // every commit, which the suite pays ~100 times per second
+                // while its pane splitter is dragged.
+                .drawingGroup()
+                // Rasterize icon + shadow once: a bare .shadow forces an
+                // offscreen blur pass on every recomposite, which is visible
+                // as stutter while the suite's pane splitter resizes this pane.
+                .drawingGroup()
             VStack(spacing: 4) {
                 Text("CAMouflage is off")
                     .font(.headline)

@@ -1,5 +1,6 @@
 import Foundation
 import AppKit
+import ImageIO
 import SimBridgeServer
 
 private let kControlSocketPath = "/tmp/camouflage.sock"
@@ -79,7 +80,10 @@ public final class MockCameraServer: ObservableObject {
             self?.flashTraffic()
         }
         frameServer.onPreviewFrame = { [weak self] jpeg in
-            let image = NSImage(data: jpeg)
+            // Decode to a panel-sized thumbnail here, off the UI thread: handing
+            // SwiftUI the full-resolution frame makes every panel redraw pay
+            // for downsampling a 1080p image into a ~200-point preview box.
+            let image = Self.previewThumbnail(from: jpeg)
             DispatchQueue.main.async {
                 self?.previewImage = image
             }
@@ -283,6 +287,18 @@ public final class MockCameraServer: ObservableObject {
     private func log(_ message: String) {
         NSLog("CAMouflage-Mock: %@", message)
         transport.note(message)
+    }
+
+    private static func previewThumbnail(from jpeg: Data) -> NSImage? {
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceThumbnailMaxPixelSize: 880,
+        ]
+        guard let source = CGImageSourceCreateWithData(jpeg as CFData, nil),
+              let thumbnail = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary)
+        else { return NSImage(data: jpeg) }
+        return NSImage(cgImage: thumbnail, size: .zero)
     }
 
     private func flashTraffic() {
